@@ -107,6 +107,9 @@ Provider IDs and hint kinds are strings, so the format has no fixed list of engi
 
 Provider status is also emitted as a hint. This makes the final observation say which sources were present at generation time. A later resolver can tell the difference between a missing value and a provider that was unavailable for the whole scene.
 
+<img width="970" height="643" alt="Screenshot 2026-08-13 at 1 31 56 PM" src="https://github.com/user-attachments/assets/6186b8e2-a02a-4016-be60-4a4f3eb7388f" />
+
+
 ## Generation and fuzzy resolution
 
 SuperSelector generation records the full durable provider output. Every emitted hint gets an exact field in the compact string. Runtime handles such as process IDs are not selector hints: they identify one launch, cannot be reused by parallel or later runs, and add no cache value.
