@@ -1,20 +1,25 @@
-# SuperSelectors for Computer Use
+# Cache-able "SuperSelectors" for Computer Use Agents
 
-SuperSelectors are my attempt at giving CUA systems one selector format that can carry hints from any source the driver has access to.
+`SuperSelectors` are my attempt at giving CUA systems one cachable "visual element selector" string that can carry hints from any source the driver has access to.
+
+Think of it as a fuzzy `xpath` or CSS selector, but for arbitrary things on your screen, not only DOM elements.
+
+<img width="720" height="555" alt="Screenshot 2026-08-13 at 12 36 44 PM (4)" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
+
 
 `SuperSelector.app` is a small macOS app for inspecting the SuperSelector generated for whatever is under your cursor.
 
 **[Build and run the app](#build-and-run)**
 
-During a normal computer-use loop, the driver usually has several ways to describe the same element:
+During a normal computer-use loop, a driver usually has several ways to reference a UI element:
 
-- its position on the screen;
-- its role, label, value, and actions in the OS accessibility tree;
-- text and bounds from OCR;
-- visual features from the current screenshot;
-- viewport and document coordinates when a browser is involved;
-- CSS, XPath, DOM attributes, and the browser accessibility tree;
-- framework- or app-specific identifiers from Electron or other runtimes.
+- its x,y bounding box on the screen
+- its role, label, value, and actions in the OS accessibility tree
+- text and edge bounds from OCR
+- visual features (computer vision)
+- viewport and document-relative CSS box coordinates (when in a browser)
+- CSS, XPath, DOM attributes, and the browser accessibility tree
+- framework- or app-specific identifiers from Electron, Qt, or other UI frameworks
 
 A **SuperSelector** collects all of these hints into one provider-attributed description of the element as it appeared in a particular screen, view, or scene.
 
