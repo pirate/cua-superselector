@@ -1,0 +1,25 @@
+{
+  "title": "Decoupling identifiers from location",
+  "source_url": "https://claude.ai/share/dae3ce4b-33c2-46e4-855c-8d83991fd674",
+  "snapshot_uuid": "dae3ce4b-33c2-46e4-855c-8d83991fd674",
+  "conversation_uuid": "fca6f771-f2d1-4c25-935e-dade2b80d15f",
+  "shared_by": "Nick",
+  "snapshot_created_at": "2026-05-29T22:14:05.352094Z",
+  "snapshot_updated_at": "2026-05-29T22:14:05.352094Z",
+  "message_count": 54,
+  "human_message_count": 27,
+  "assistant_message_count": 27,
+  "interrupted_response_count": 5,
+  "attachment_count": 0,
+  "file_count": 0,
+  "outputs": {
+    "claude-transcript.md": {
+      "bytes": 137512,
+      "sha256": "ba8797a3ecca43984c22d0d8dc5aef4c5859b60f66d9111c4e2bfbb94a6f8aa2"
+    },
+    "claude-transcript.json": {
+      "bytes": 180007,
+      "sha256": "b7f161d34d0b6c92402434fbd7c5d142fd57060969513a5280b6346cb4da395e"
+    }
+  }
+}
