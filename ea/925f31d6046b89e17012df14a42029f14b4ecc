@@ -1,0 +1,35 @@
+README.md
+  s_83b47f56be2589::t_fa51ac974835b9 112,137,143-145,173-187
+Sources/SuperSelector/AccessibilityInspector.swift
+  s_83b47f56be2589::t_7f24a274688b73 9-16,49-57,65-71,75-78,86-124,135-157,163-171,178-221,224-226,234,237-238,242-255,272,278,282-297,348-351,360-364,368-398,401-404,453-479
+Sources/SuperSelector/HintEngine.swift
+  s_83b47f56be2589::t_17d80bd00eedba 29-31
+Sources/SuperSelector/HintModel.swift
+  s_83b47f56be2589::t_7910e4cefec507 57-60,72
+Sources/SuperSelector/Providers.swift
+  s_83b47f56be2589::t_d02f38da2d251b 111-167,200-236
+Sources/SuperSelector/SelectorResolver.swift
+  s_83b47f56be2589::t_a175a1202eaa0e 116-148,151-162,182-185,187,191,250-251,293,296,298,304,306-307
+SuperSelector.app/Contents/Info.plist
+  s_83b47f56be2589::t_0f2b92a6d2ab50 18,20
+Tests/SuperSelectorTests/SuperSelectorEncoderTests.swift
+  s_83b47f56be2589::t_8d9d3557e92f8d 32-53,146-157,174-175,196-274
+support/Info.plist
+  s_83b47f56be2589::t_e6b8597901560b 18,20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ea925f31d6046b89e17012df14a42029f14b4ecc",
+  "prompts": {},
+  "sessions": {
+    "s_83b47f56be2589": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffc6f-4642-7bd0-adbf-22536d8118c4",
+        "model": "unknown"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
