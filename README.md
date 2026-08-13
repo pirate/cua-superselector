@@ -4,12 +4,12 @@
 
 Think of it as a fuzzy `xpath` or CSS selector, but for arbitrary things on your screen, not only DOM elements.
 
-<img width="45%" src="https://github.com/user-attachments/assets/1f07f220-159b-468d-9605-d7f36fdd41d8" /><img width="50%" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
+> **⬇️ Download the latest <a href="https://github.com/pirate/cua-superselector/releases"><code>SuperSelector.app</code><a/> here.**
 
+<img width="45%" src="https://github.com/user-attachments/assets/1f07f220-159b-468d-9605-d7f36fdd41d8" /><img width="50%" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
 
 `SuperSelector.app` is a small macOS app for inspecting the SuperSelector generated for whatever is under your cursor.
 
-**[Build and run the app](#build-and-run)**
 
 During a normal computer-use loop, a driver usually has several ways to reference a UI element:
 
