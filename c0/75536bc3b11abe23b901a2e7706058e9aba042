@@ -1,0 +1,52 @@
+.gitignore
+  h_923c208e183a7b 1-5
+Package.swift
+  h_923c208e183a7b 1-22
+README.md
+  h_923c208e183a7b 1-194
+Sources/SuperSelector/AccessibilityInspector.swift
+  h_923c208e183a7b 1-256
+Sources/SuperSelector/HintEngine.swift
+  h_923c208e183a7b 1-112
+Sources/SuperSelector/HintModel.swift
+  h_923c208e183a7b 1-166
+Sources/SuperSelector/Overlay.swift
+  h_923c208e183a7b 1-516
+Sources/SuperSelector/Providers.swift
+  h_923c208e183a7b 1-272
+Sources/SuperSelector/RecentSelectors.swift
+  h_923c208e183a7b 1-27
+Sources/SuperSelector/SelectorResolver.swift
+  h_923c208e183a7b 1-342
+Sources/SuperSelector/main.swift
+  h_923c208e183a7b 1-213
+SuperSelector.app/Contents/Info.plist
+  h_923c208e183a7b 1-28
+SuperSelector.app/Contents/_CodeSignature/CodeResources
+  h_923c208e183a7b 1-115
+Tests/SuperSelectorTests/SuperSelectorEncoderTests.swift
+  h_923c208e183a7b 1-161
+plans/claude-transcript-manifest.json
+  h_923c208e183a7b 1-25
+plans/claude-transcript.json
+  h_923c208e183a7b 1-1691
+plans/claude-transcript.md
+  h_923c208e183a7b 1-2008
+plans/export_claude_snapshot.py
+  h_923c208e183a7b 1-142
+scripts/build-app.sh
+  h_923c208e183a7b 1-49
+support/Info.plist
+  h_923c208e183a7b 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c075536bc3b11abe23b901a2e7706058e9aba042",
+  "prompts": {},
+  "humans": {
+    "h_923c208e183a7b": {
+      "author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
