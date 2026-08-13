@@ -4,7 +4,7 @@
 
 Think of it as a fuzzy `xpath` or CSS selector, but for arbitrary things on your screen, not only DOM elements.
 
-<img width="720" height="555" alt="Screenshot 2026-08-13 at 12 36 44 PM (4)" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
+<img width="45%" src="https://github.com/user-attachments/assets/1f07f220-159b-468d-9605-d7f36fdd41d8" /><img width="50%" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
 
 
 `SuperSelector.app` is a small macOS app for inspecting the SuperSelector generated for whatever is under your cursor.
