@@ -108,6 +108,63 @@ struct AbsoluteScreenHintProvider: HintProvider {
   }
 }
 
+struct WindowRelativeHintProvider: HintProvider {
+  let id = "window.relative"
+
+  func report(for scene: SceneSnapshot) -> ProviderReport {
+    if !scene.accessibilityTrusted {
+      return ProviderReport(provider: id, state: .unavailable, detail: "permission-required")
+    }
+    guard let element = scene.accessibilityElement else {
+      return ProviderReport(provider: id, state: .degraded, detail: "no-element-at-pointer")
+    }
+    guard element.windowFrameInQuartzCoordinates != nil else {
+      return ProviderReport(provider: id, state: .degraded, detail: "no-window-frame")
+    }
+    return ProviderReport(provider: id, state: .available, detail: nil)
+  }
+
+  func hints(for scene: SceneSnapshot) -> [Hint] {
+    guard let element = scene.accessibilityElement,
+      let windowFrame = element.windowFrameInQuartzCoordinates
+    else { return [] }
+
+    var hints = [
+      Hint(
+        provider: id,
+        kind: "window.frame.screen",
+        band: "geometry",
+        value: rectString(windowFrame),
+        valueType: .scalar,
+        metadata: ["space": "quartz-global", "origin": "top-left"]
+      ),
+      Hint(
+        provider: id,
+        kind: "pointer.position.window",
+        band: "geometry",
+        value: pointString(
+          CoordinateSpaces.localPoint(fromGlobal: scene.cursorQuartz, in: windowFrame)),
+        valueType: .scalar,
+        metadata: ["relativeTo": "window", "origin": "top-left"]
+      ),
+    ]
+
+    if let elementFrame = element.frameInQuartzCoordinates {
+      hints.append(
+        Hint(
+          provider: id,
+          kind: "element.frame.window",
+          band: "geometry",
+          value: rectString(
+            CoordinateSpaces.localRect(fromGlobal: elementFrame, in: windowFrame)),
+          valueType: .scalar,
+          metadata: ["relativeTo": "window", "origin": "top-left"]
+        ))
+    }
+    return hints
+  }
+}
+
 struct MacAccessibilityHintProvider: HintProvider {
   let id = "mac.ax"
 
@@ -140,16 +197,43 @@ struct MacAccessibilityHintProvider: HintProvider {
         )
       )
     }
-    result.append(
-      Hint(
-        provider: id,
-        kind: "process.id",
-        band: "scope",
-        value: String(element.processIdentifier),
-        valueType: .scalar,
-        metadata: ["lifetime": "session"]
-      )
-    )
+    if let bundlePath = element.applicationBundlePath {
+      result.append(
+        Hint(
+          provider: id,
+          kind: "application.bundle-path",
+          band: "scope",
+          value: bundlePath
+        ))
+    }
+    if let executablePath = element.applicationExecutablePath {
+      result.append(
+        Hint(
+          provider: id,
+          kind: "application.executable-path",
+          band: "scope",
+          value: executablePath
+        ))
+    }
+    if let windowIdentifier = element.windowIdentifier {
+      result.append(
+        Hint(
+          provider: id,
+          kind: "window.identifier",
+          band: "scope",
+          value: windowIdentifier
+        ))
+    }
+    if let windowTitle = element.windowTitle {
+      result.append(
+        Hint(
+          provider: id,
+          kind: "window.title",
+          band: "scope",
+          value: windowTitle,
+          privacy: .sensitive
+        ))
+    }
 
     if let role = element.role {
       result.append(

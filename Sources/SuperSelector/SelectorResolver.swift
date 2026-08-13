@@ -113,9 +113,53 @@ enum SelectorResolver {
 
     if !accessibilityHints.isEmpty {
       let bundleIdentifier = accessibilityHints.first { $0.kind == "application.bundle-id" }?.value
+      let applicationBundlePath = accessibilityHints.first {
+        $0.kind == "application.bundle-path"
+      }?.value
+      let applicationExecutablePath = accessibilityHints.first {
+        $0.kind == "application.executable-path"
+      }?.value
+      let windowIdentifier = accessibilityHints.first { $0.kind == "window.identifier" }?.value
+      let windowTitle = accessibilityHints.first { $0.kind == "window.title" }?.value
+      let role = accessibilityHints.first { $0.kind == "semantic.role" }?.value
+      let subrole = accessibilityHints.first { $0.kind == "native.subrole" }?.value
+      let identifier = accessibilityHints.first { $0.kind == "native.identifier" }?.value
+      let identityValues = Set(
+        accessibilityHints.filter {
+          [
+            "semantic.name", "semantic.description", "semantic.help", "semantic.value",
+          ].contains($0.kind)
+        }.map(\.value)
+      )
+      let ancestorRolePath = accessibilityHints.first { $0.kind == "ancestor.role-path" }?.value
+
+      if accessibilityHints.contains(where: {
+        $0.kind == "state.focused" && $0.value == "true"
+      }),
+        let focused = AccessibilityInspector.focusedSnapshot(bundleIdentifier: bundleIdentifier),
+        let focusedTarget = try? resolveAccessibilityCandidate(
+          storedHints: hints,
+          candidates: [focused],
+          screenFrames: screenFrames
+        )
+      {
+        return focusedTarget
+      }
+
       let candidates =
         suppliedCandidates
-        ?? AccessibilityInspector.snapshots(bundleIdentifier: bundleIdentifier)
+        ?? AccessibilityInspector.snapshots(
+          bundleIdentifier: bundleIdentifier,
+          applicationBundlePath: applicationBundlePath,
+          applicationExecutablePath: applicationExecutablePath,
+          windowIdentifier: windowIdentifier,
+          windowTitle: windowTitle,
+          role: role,
+          subrole: subrole,
+          identifier: identifier,
+          identityValues: identityValues,
+          ancestorRolePath: identifier == nil && identityValues.isEmpty ? ancestorRolePath : nil
+        )
       return try resolveAccessibilityCandidate(
         storedHints: hints,
         candidates: candidates,
@@ -135,15 +179,16 @@ enum SelectorResolver {
       $0.provider == "mac.ax" && $0.kind != "provider.status"
     }
     let storedByKind = Dictionary(grouping: storedAccessibilityHints, by: \.kind)
-    let visibleCandidates = candidates.filter { candidate in
+    // Resolve position-independent AX identity before consulting any geometry.
+    // A window can move between displays, and the old selector geometry must not
+    // remove or favor an otherwise exact live accessibility candidate.
+    let framedCandidates = candidates.filter { candidate in
       guard let quartzFrame = candidate.frameInQuartzCoordinates else { return false }
-      let frame = CoordinateSpaces.appKitRect(fromQuartz: quartzFrame)
-      return frame.width > 0 && frame.height > 0
-        && screenFrames.contains(where: { $0.intersects(frame) })
+      return quartzFrame.width > 0 && quartzFrame.height > 0
     }
 
     var matches: [CandidateMatch] = []
-    for candidate in visibleCandidates {
+    for candidate in framedCandidates {
       let candidateHints = accessibilityHints(for: candidate)
       let candidateByKind = Dictionary(grouping: candidateHints, by: \.kind)
       guard
@@ -202,7 +247,8 @@ enum SelectorResolver {
     }
 
     for hardKind in [
-      "application.bundle-id", "semantic.role", "native.role", "native.subrole",
+      "application.bundle-id", "application.bundle-path", "application.executable-path",
+      "application.name", "window.identifier", "semantic.role", "native.role", "native.subrole",
     ] where !matches(hardKind) {
       return false
     }
@@ -244,17 +290,21 @@ enum SelectorResolver {
   private static func hintWeight(_ hint: Hint) -> Double {
     switch hint.kind {
     case "native.identifier": return 20
+    case "window.identifier": return 18
     case "semantic.name": return 16
-    case "semantic.value": return 14
     case "application.bundle-id": return 12
+    case "application.bundle-path", "application.executable-path": return 10
     case "semantic.description": return 10
+    case "window.title": return 8
     case "semantic.role", "native.role": return 8
     case "native.subrole": return 7
     case "ancestor.role-path": return 6
     case "semantic.help": return 5
     case "application.name": return 4
+    case "semantic.value": return 3
     case "ancestor.contains-role": return 2
-    case "process.id": return 0.25
+    case "capability.action": return 1
+    case "state.enabled", "state.focused", "state.selected": return 0
     default: return 1
     }
   }

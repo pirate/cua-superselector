@@ -109,7 +109,7 @@ Provider status is also emitted as a hint. This makes the final observation say 
 
 ## Generation and fuzzy resolution
 
-SuperSelector generation records the full provider output. Every hint gets an exact field in the compact string, including hints that may be session-specific or likely to change.
+SuperSelector generation records the full durable provider output. Every emitted hint gets an exact field in the compact string. Runtime handles such as process IDs are not selector hints: they identify one launch, cannot be reused by parallel or later runs, and add no cache value.
 
 Fuzzy matching happens later, when a resolver compares the stored observation with candidates from a new scene. The resolver can compare compatible hint types, apply provider-specific rules, require agreement across several independent sources, and decline ambiguous matches.
 
@@ -134,13 +134,15 @@ The app is a live view of the generation side on macOS. As the cursor moves, it:
 
 The current app registers `screen.absolute` and `mac.ax`.
 
-`screen.absolute` emits display and screen geometry. `mac.ax` calls the macOS system Accessibility APIs to read the application, process, role, subrole, identifier, title, description, value, actions, state, bounds, and ancestor roles for the element under the cursor.
+`screen.absolute` emits display and screen geometry. `mac.ax` calls the macOS system Accessibility APIs to read stable application identity (bundle ID, bundle path, executable path, and name), containing-window identity, role, subrole, identifier, title, description, value, actions, state, bounds, and ancestor roles for the element under the cursor. It deliberately does not emit the process ID.
 
 The overlay uses provider icons and category colors so changes are easy to follow while moving between applications and UI elements.
 
 The overlay is hidden while the pointer is over SuperSelector's own status item and while its menu is open, so the inspector does not cover or record its own controls.
 
-The resolver decodes the lossless format and, when `mac.ax` identity hints are present, enumerates the target application's live accessibility tree. It requires exact application and role agreement plus a strong identifier, name/value, or structural match; then it uses the remaining AX hints as corroboration and declines tied results. After finding the element at its current location, it preserves the original click's relative offset within the element. This allows an element to resolve after scrolling or window movement without replaying stale absolute coordinates. A selector without usable AX identity falls back to its `screen.absolute` hints. The resolver only visualizes the result and never clicks.
+The resolver decodes the lossless format and first scopes directly to the currently running app by stable application identity, then to an exact AX window when one was recorded. A focused-element hint can be checked directly. Otherwise it traverses only the smallest available AX subtree, applying cheap role, native identifier, text, and ancestor predicates before hydrating full candidates. macOS does not expose a general system-wide query-by-label API, so traversal remains the last step when direct scope is insufficient.
+
+It requires exact application and role agreement plus a strong identifier, name/value, or structural match; then it uses the remaining AX hints as corroboration and declines tied results. Coordinates never select or rank an AX candidate. Only after one position-independent candidate wins are the current bounds used to preserve the original click's relative offset within that element. This allows an element to resolve after scrolling or window movement without replaying stale absolute coordinates. A selector without usable AX identity falls back to its `screen.absolute` hints. The resolver only visualizes the result and never clicks.
 
 ## Adding a provider
 
@@ -167,6 +169,21 @@ HintEngine(providers: [
 ```
 
 A browser provider can run beside the existing screen and macOS AX providers. It receives the same scene, finds the browser target and frame at the target point, and emits browser-specific hints into the same observation. The encoder and overlay already accept arbitrary provider IDs, hint kinds, values, and metadata.
+
+## Fuzzy Matching Strategies
+
+The encoded SuperSelector is a lossless observation, not a commitment to one matching algorithm. A resolver can decode the same provider fields into several indexes or feature representations and choose a policy based on the available providers, action risk, and size of the current scene. Some strategies explored in [`plans/`](plans/) are:
+
+- **Prefix matching with ranked subcomponents.** Compare typed fields independently, reward longer shared prefixes, and rank stable, position-independent hints such as application identity, native identifiers, roles, labels, and ancestor structure above geometry. Provider-specific indexes can retrieve candidates from the most selective fields first. Coordinates should be a last-resort fallback, not evidence that overrides a semantic mismatch.
+- **Lexical and structural retrieval.** Build inverted indexes over exact tokens, substrings, character trigrams, edge n-grams, AX/DOM roles, attributes, labels, and ancestor paths. Boolean intersections cheaply narrow the scene; BM25-style field weights, phrase proximity, or explicit per-field scores can rank the survivors while remaining fast and explainable.
+- **Fuzzy and locality-preserving hashes.** Use a hash suited to each field instead of hashing the whole selector indiscriminately: SimHash for text-like features, MinHash for token sets, LSH bands for candidate lookup, pHash/dHash for visual patches, and geohash- or Morton-style encodings for spatial data. Hamming distance or shared hash prefixes then provide an efficient similarity signal. Raw scalar values should remain prefix-matchable rather than being avalanche-hashed.
+- **Embeddings, RAG, and vector similarity.** Represent structural, textual, contextual, spatial, and visual hints as separate vectors, retrieve nearest candidates with cosine similarity, then rerank the top results. Vectors can come from deterministic feature hashing or learned text/image encoders. Hierarchical retrieval keeps this practical: use cheap exact and lexical filters first, embed only the ambiguous candidates, and add an ANN index such as HNSW only when brute-force comparison is no longer cheap.
+- **Late fusion across providers.** Keep modalities separate instead of concatenating them into one opaque score. A resolver can require agreement between independent sources, vary weights when a provider is missing or known to be unstable, and preserve a useful explanation such as “exact AX identifier plus matching role and label” rather than only reporting a global similarity number.
+- **Tiered visual recovery.** For canvas, OCR-only, or otherwise inaccessible targets, start with inexpensive perceptual features such as pHash, dHash, HOG, edge density, OCR text, and small anchor-relative search windows. Semantic image embeddings can be a slower fallback for the few candidates that remain ambiguous rather than a mandatory full-screen indexing pass.
+- **Confidence gates and abstention.** Candidate retrieval and final acceptance are separate decisions. Require a high absolute score, a sufficient margin over the runner-up, and any mandatory exact invariants before resolving. Ties, contradictory strong hints, or low-information selectors should produce a cache miss and return control to the CUA loop. For SuperSelectors, avoiding a false-positive click is more important than maximizing cache hits.
+- **Measured or learned ranking.** Differential recordings and replay outcomes can estimate which fields actually remain stable for a site or application, calibrate thresholds, or learn lightweight per-band weights. The serialized observation does not need to change when the ranking model changes; model and policy versions belong to the resolver.
+
+These approaches are complementary. A likely resolver pipeline is direct lookup by stable native identifiers, then indexed lexical/structural candidate generation, then multi-provider scoring or vector reranking, followed by strict ambiguity checks. Visual and coordinate strategies fill gaps when stronger semantic providers are absent.
 
 ## Build and run
 

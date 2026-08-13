@@ -71,7 +71,9 @@ final class CrosshairView: NSView {
 }
 
 final class InspectorView: NSView {
+  private static let selectorPreviewCharacterLimit = 440
   private let textView = NSTextView()
+  private let scrollView = NSScrollView()
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -81,21 +83,52 @@ final class InspectorView: NSView {
     layer?.borderWidth = 1.5
     layer?.borderColor = hotPink.cgColor
 
-    textView.isEditable = false
+    scrollView.frame = bounds
+    scrollView.autoresizingMask = [.width, .height]
+    scrollView.drawsBackground = false
+    scrollView.borderType = .noBorder
+    scrollView.hasHorizontalScroller = false
+    scrollView.hasVerticalScroller = true
+    scrollView.autohidesScrollers = true
+
+    textView.frame = scrollView.contentView.bounds
+    textView.minSize = .zero
+    textView.maxSize = CGSize(
+      width: CGFloat.greatestFiniteMagnitude,
+      height: CGFloat.greatestFiniteMagnitude
+    )
+    textView.isHorizontallyResizable = false
+    textView.isVerticallyResizable = true
     textView.isSelectable = true
+    textView.isEditable = false
     textView.drawsBackground = false
     textView.textContainerInset = CGSize(width: 12, height: 10)
     textView.textContainer?.lineFragmentPadding = 0
-    textView.autoresizingMask = [.width, .height]
-    textView.frame = bounds
-    addSubview(textView)
+    textView.textContainer?.widthTracksTextView = true
+    textView.textContainer?.heightTracksTextView = false
+    textView.textContainer?.containerSize = CGSize(
+      width: scrollView.contentSize.width,
+      height: CGFloat.greatestFiniteMagnitude
+    )
+    scrollView.documentView = textView
+    addSubview(scrollView)
   }
 
   required init?(coder: NSCoder) { nil }
 
   func update(with observation: SuperSelectorObservation) {
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.lineSpacing = 2
+    let hintParagraph = NSMutableParagraphStyle()
+    hintParagraph.lineSpacing = 2
+    hintParagraph.lineBreakMode = .byCharWrapping
+
+    let selectorFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+    let selectorParagraph = NSMutableParagraphStyle()
+    selectorParagraph.lineSpacing = 1
+    selectorParagraph.lineBreakMode = .byCharWrapping
+    let selectorPreview =
+      observation.compactSelector.count > Self.selectorPreviewCharacterLimit
+      ? String(observation.compactSelector.prefix(Self.selectorPreviewCharacterLimit - 1)) + "…"
+      : observation.compactSelector
 
     let output = NSMutableAttributedString()
     output.append(
@@ -109,11 +142,11 @@ final class InspectorView: NSView {
     )
     output.append(
       NSAttributedString(
-        string: observation.compactSelector + "\n\n",
+        string: selectorPreview + "\n\n",
         attributes: [
-          .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+          .font: selectorFont,
           .foregroundColor: NSColor.white,
-          .paragraphStyle: paragraph,
+          .paragraphStyle: selectorParagraph,
         ]
       )
     )
@@ -148,7 +181,7 @@ final class InspectorView: NSView {
       providerHeader
     )
     for hint in observation.hints {
-      output.append(formattedLine(for: hint, paragraph: paragraph))
+      output.append(formattedLine(for: hint, paragraph: hintParagraph))
     }
     textView.textStorage?.setAttributedString(output)
     textView.scrollToBeginningOfDocument(nil)
@@ -505,7 +538,14 @@ final class OverlayCoordinator {
       return
     }
     let visible = screen.visibleFrame
-    let size = inspectorPanel.frame.size
+    let margin: CGFloat = 16
+    let size = CGSize(
+      width: min(820, max(320, visible.width - (margin * 2))),
+      height: min(560, max(240, visible.height - (margin * 2)))
+    )
+    if inspectorPanel.frame.size != size {
+      inspectorPanel.setContentSize(size)
+    }
     var origin = CGPoint(x: cursor.x + 28, y: cursor.y - size.height - 28)
     if origin.x + size.width > visible.maxX { origin.x = cursor.x - size.width - 28 }
     if origin.y < visible.minY { origin.y = cursor.y + 28 }

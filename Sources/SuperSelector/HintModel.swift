@@ -52,9 +52,12 @@ struct Hint: Sendable {
 }
 
 struct AXElementSnapshot: Sendable {
-  var processIdentifier: pid_t = 0
   var applicationName: String?
   var bundleIdentifier: String?
+  var applicationBundlePath: String?
+  var applicationExecutablePath: String?
+  var windowIdentifier: String?
+  var windowTitle: String?
   var role: String?
   var subrole: String?
   var identifier: String?
@@ -66,6 +69,7 @@ struct AXElementSnapshot: Sendable {
   var focused: Bool?
   var selected: Bool?
   var frameInQuartzCoordinates: CGRect?
+  var windowFrameInQuartzCoordinates: CGRect?
   var actions: [String] = []
   var ancestorRoles: [String] = []
 }

@@ -26,7 +26,9 @@ final class HintEngine {
   }
 
   init(
-    providers: [any HintProvider] = [AbsoluteScreenHintProvider(), MacAccessibilityHintProvider()]
+    providers: [any HintProvider] = [
+      AbsoluteScreenHintProvider(), WindowRelativeHintProvider(), MacAccessibilityHintProvider(),
+    ]
   ) {
     self.providers = providers
   }
