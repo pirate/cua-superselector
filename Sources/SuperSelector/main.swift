@@ -1,14 +1,14 @@
 import AppKit
 import Foundation
 
-private final class StatusItemHoverObserver: NSObject {
+private final class StatusItemHoverObserver: NSResponder {
   var onHoverChanged: ((Bool) -> Void)?
 
-  @objc func mouseEntered(with event: NSEvent) {
+  override func mouseEntered(with event: NSEvent) {
     onHoverChanged?(true)
   }
 
-  @objc func mouseExited(with event: NSEvent) {
+  override func mouseExited(with event: NSEvent) {
     onHoverChanged?(false)
   }
 }
