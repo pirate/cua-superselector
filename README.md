@@ -131,6 +131,9 @@ The app is a live view of the generation side on macOS. As the cursor moves, it:
 - shows every expanded hint on its own line;
 - labels each hint with its provider, category, value, metadata, and privacy class;
 - shows the availability state of each provider;
+- renders live `superselector.breadcrumbs` as a linked history of independently resolvable SuperSelectors for semantic hovers, clicks, typing, keys, and coalesced scroll gestures;
+- gives every history node its own readable AX ancestry and interaction sub-breadcrumbs, with one SuperSelector per line and the current hovered selector as the live tail; every mouse hover, click, or scroll includes an offset from the previous linked target's top-left;
+- resets the breadcrumb route when Escape is pressed twice quickly, without intercepting either key press;
 - copies a fresh selector sampled at the exact click location whenever a click passes through to another app;
 - keeps the 15 most recent exact selectors in a newest-first menu section, using exact-string deduplication only;
 - provides **Resolve selector…** in the menu bar to paste an `ss3/e1` selector and temporarily pin its screen-provider crosshairs and outline.

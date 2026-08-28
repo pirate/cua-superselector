@@ -116,7 +116,7 @@ final class InspectorView: NSView {
 
   required init?(coder: NSCoder) { nil }
 
-  func update(with observation: SuperSelectorObservation) {
+  func update(with observation: SuperSelectorObservation, breadcrumbs: String) {
     let hintParagraph = NSMutableParagraphStyle()
     hintParagraph.lineSpacing = 2
     hintParagraph.lineBreakMode = .byCharWrapping
@@ -147,6 +147,34 @@ final class InspectorView: NSView {
           .font: selectorFont,
           .foregroundColor: NSColor.white,
           .paragraphStyle: selectorParagraph,
+        ]
+      )
+    )
+    output.append(
+      NSAttributedString(
+        string: "BREADCRUMBS  ",
+        attributes: [
+          .font: NSFont.monospacedSystemFont(ofSize: 15, weight: .bold),
+          .foregroundColor: hotPink,
+        ]
+      )
+    )
+    output.append(
+      NSAttributedString(
+        string: "ESC ESC TO RESET\n",
+        attributes: [
+          .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold),
+          .foregroundColor: NSColor(calibratedWhite: 0.56, alpha: 1),
+        ]
+      )
+    )
+    output.append(
+      NSAttributedString(
+        string: "superselector.breadcrumbs = \(breadcrumbs)\n\n",
+        attributes: [
+          .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+          .foregroundColor: NSColor.systemMint,
+          .paragraphStyle: hintParagraph,
         ]
       )
     )
@@ -324,6 +352,12 @@ final class InspectorView: NSView {
 }
 
 final class OverlayCoordinator {
+  private struct ClickCaptureRequest {
+    let quartzPoint: CGPoint
+    let button: BreadcrumbMouseButton
+    let breadcrumbWasRecorded: Bool
+  }
+
   private let hintEngine = HintEngine()
   private let clickCaptureEngine = HintEngine()
   private let resolutionQueue = DispatchQueue(
@@ -338,10 +372,17 @@ final class OverlayCoordinator {
   private var inspectionTimer: Timer?
   private var resolvedTargetTimer: Timer?
   private var globalClickMonitor: Any?
-  private var clickCaptureQueue: [CGPoint] = []
+  private var globalScrollMonitor: Any?
+  private var globalKeyMonitor: Any?
+  private var localKeyMonitor: Any?
+  private var keyEventTap: CFMachPort?
+  private var keyEventTapSource: CFRunLoopSource?
+  private var clickCaptureQueue: [ClickCaptureRequest] = []
   private var clickCaptureInFlight = false
   private var latestObservation: SuperSelectorObservation?
   private var resolvedTarget: ResolvedSelectorTarget?
+  private var breadcrumbTrail = BreadcrumbTrail()
+  private var escapeResetDetector = DoubleEscapeResetDetector()
   private var isSuppressed = false
 
   init() {
@@ -386,11 +427,27 @@ final class OverlayCoordinator {
       matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
     ) { [weak self] event in
       let point = event.cgEvent?.location ?? CGEvent(source: nil)?.location
+      let button = Self.breadcrumbButton(for: event)
       DispatchQueue.main.async {
-        guard let self, !self.isSuppressed, let point else { return }
-        self.enqueueClickCapture(at: point)
+        guard let self, !self.isSuppressed, let point, let button else { return }
+        self.enqueueClickCapture(at: point, button: button)
       }
     }
+    globalScrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) {
+      [weak self] event in
+      let point = event.cgEvent?.location ?? CGEvent(source: nil)?.location
+      let deltaX = event.scrollingDeltaX
+      let deltaY = event.scrollingDeltaY
+      DispatchQueue.main.async {
+        guard let self, !self.isSuppressed, let point else { return }
+        self.recordScroll(
+          at: point,
+          deltaX: deltaX,
+          deltaY: deltaY
+        )
+      }
+    }
+    installKeyMonitoring()
     sampleHints()
   }
 
@@ -400,6 +457,21 @@ final class OverlayCoordinator {
     resolvedTargetTimer?.invalidate()
     if let globalClickMonitor {
       NSEvent.removeMonitor(globalClickMonitor)
+    }
+    if let globalScrollMonitor {
+      NSEvent.removeMonitor(globalScrollMonitor)
+    }
+    if let globalKeyMonitor {
+      NSEvent.removeMonitor(globalKeyMonitor)
+    }
+    if let localKeyMonitor {
+      NSEvent.removeMonitor(localKeyMonitor)
+    }
+    if let keyEventTapSource {
+      CFRunLoopRemoveSource(CFRunLoopGetMain(), keyEventTapSource, .commonModes)
+    }
+    if let keyEventTap {
+      CFMachPortInvalidate(keyEventTap)
     }
   }
 
@@ -496,17 +568,35 @@ final class OverlayCoordinator {
     positionInspector(near: cursor)
   }
 
-  private func enqueueClickCapture(at quartzPoint: CGPoint) {
-    clickCaptureQueue.append(quartzPoint)
+  private func enqueueClickCapture(at quartzPoint: CGPoint, button: BreadcrumbMouseButton) {
+    let anchor = recentBreadcrumbObservation(at: quartzPoint)
+    if let anchor {
+      breadcrumbTrail.recordClick(observation: anchor, button: button, at: quartzPoint)
+      refreshInspector()
+    }
+    clickCaptureQueue.append(
+      ClickCaptureRequest(
+        quartzPoint: quartzPoint,
+        button: button,
+        breadcrumbWasRecorded: anchor != nil
+      ))
     startNextClickCapture()
   }
 
   private func startNextClickCapture() {
     guard !clickCaptureInFlight, !clickCaptureQueue.isEmpty else { return }
     clickCaptureInFlight = true
-    let quartzPoint = clickCaptureQueue.removeFirst()
-    clickCaptureEngine.sample(at: quartzPoint) { [weak self] observation in
+    let request = clickCaptureQueue.removeFirst()
+    clickCaptureEngine.sample(at: request.quartzPoint) { [weak self] observation in
       guard let self else { return }
+      if !request.breadcrumbWasRecorded {
+        breadcrumbTrail.recordClick(
+          observation: observation,
+          button: request.button,
+          at: request.quartzPoint
+        )
+        refreshInspector()
+      }
       copySelector(observation.compactSelector)
       onSelectorCaptured?(observation.compactSelector)
       clickCaptureInFlight = false
@@ -524,11 +614,204 @@ final class OverlayCoordinator {
     guard let quartzPoint = CGEvent(source: nil)?.location else { return }
     hintEngine.sample(at: quartzPoint) { [weak self] observation in
       guard let self else { return }
+      breadcrumbTrail.updateLive(observation: observation)
       latestObservation = observation
       inspectorPanel.title = "SuperSelector Hints — \(observation.compactSelector)"
       inspectorPanel.setAccessibilityLabel(
         "SuperSelector live hints, \(observation.compactSelector)")
-      inspectorView.update(with: observation)
+      refreshInspector()
+    }
+  }
+
+  private func refreshInspector() {
+    guard let observation = latestObservation else { return }
+    inspectorView.update(
+      with: observation,
+      breadcrumbs: breadcrumbTrail.rendered(current: observation)
+    )
+  }
+
+  private func recentBreadcrumbObservation(at quartzPoint: CGPoint)
+    -> SuperSelectorObservation?
+  {
+    guard let observation = latestObservation,
+      Date().timeIntervalSince(observation.scene.sampledAt) <= 0.5
+    else { return nil }
+    if let frame = observation.scene.accessibilityElement?.frameInQuartzCoordinates {
+      return frame.insetBy(dx: -3, dy: -3).contains(quartzPoint) ? observation : nil
+    }
+    let deltaX = observation.scene.cursorQuartz.x - quartzPoint.x
+    let deltaY = observation.scene.cursorQuartz.y - quartzPoint.y
+    return hypot(deltaX, deltaY) <= 8 ? observation : nil
+  }
+
+  private func installKeyMonitoring() {
+    let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+    let callback: CGEventTapCallBack = { _, type, event, userInfo in
+      guard let userInfo else { return Unmanaged.passUnretained(event) }
+      let coordinator = Unmanaged<OverlayCoordinator>.fromOpaque(userInfo)
+        .takeUnretainedValue()
+      if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let keyEventTap = coordinator.keyEventTap {
+          CGEvent.tapEnable(tap: keyEventTap, enable: true)
+        }
+        return Unmanaged.passUnretained(event)
+      }
+      guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+      let keyCode = UInt16(
+        truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+      let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+      let text = OverlayCoordinator.keyboardText(from: event)
+      let modifiers = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+      DispatchQueue.main.async { [weak coordinator] in
+        coordinator?.handleKeyDown(
+          keyCode: keyCode,
+          isRepeat: isRepeat,
+          text: text,
+          modifiers: modifiers
+        )
+      }
+      return Unmanaged.passUnretained(event)
+    }
+    let userInfo = Unmanaged.passUnretained(self).toOpaque()
+    if let tap = CGEvent.tapCreate(
+      tap: .cgSessionEventTap,
+      place: .headInsertEventTap,
+      options: .listenOnly,
+      eventsOfInterest: mask,
+      callback: callback,
+      userInfo: userInfo
+    ) {
+      keyEventTap = tap
+      let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+      keyEventTapSource = source
+      CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+      CGEvent.tapEnable(tap: tap, enable: true)
+      return
+    }
+
+    globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) {
+      [weak self] event in
+      DispatchQueue.main.async {
+        self?.handleKeyDown(
+          keyCode: event.keyCode,
+          isRepeat: event.isARepeat,
+          text: event.characters ?? "",
+          modifiers: event.modifierFlags
+        )
+      }
+    }
+    localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+      [weak self] event in
+      self?.handleKeyDown(
+        keyCode: event.keyCode,
+        isRepeat: event.isARepeat,
+        text: event.characters ?? "",
+        modifiers: event.modifierFlags
+      )
+      return event
+    }
+  }
+
+  private func handleKeyDown(
+    keyCode: UInt16,
+    isRepeat: Bool,
+    text: String,
+    modifiers: NSEvent.ModifierFlags
+  ) {
+    guard !isRepeat else { return }
+    if keyCode == 53 {
+      if escapeResetDetector.registerEscape() {
+        breadcrumbTrail.reset()
+        refreshInspector()
+      }
+      return
+    }
+    escapeResetDetector.registerOtherKey()
+    guard !isSuppressed, let observation = latestObservation else { return }
+    if Self.modifierKeyCodes.contains(keyCode) { return }
+
+    let independentModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+    let isCommand =
+      independentModifiers.contains(.command)
+      || independentModifiers.contains(.control)
+    if !isCommand, Self.isPrintableText(text) {
+      breadcrumbTrail.recordText(text, observation: observation)
+    } else {
+      breadcrumbTrail.recordKey(
+        Self.keyDescription(keyCode: keyCode, text: text, modifiers: independentModifiers),
+        observation: observation
+      )
+    }
+    refreshInspector()
+  }
+
+  private func recordScroll(at point: CGPoint, deltaX: CGFloat, deltaY: CGFloat) {
+    guard abs(deltaX) > 0.01 || abs(deltaY) > 0.01,
+      let observation = recentBreadcrumbObservation(at: point) ?? latestObservation
+    else { return }
+    breadcrumbTrail.recordScroll(
+      observation: observation,
+      at: point,
+      deltaX: deltaX,
+      deltaY: deltaY
+    )
+    refreshInspector()
+  }
+
+  private static let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+
+  private static func keyboardText(from event: CGEvent) -> String {
+    var actualLength = 0
+    var buffer = [UniChar](repeating: 0, count: 16)
+    event.keyboardGetUnicodeString(
+      maxStringLength: buffer.count,
+      actualStringLength: &actualLength,
+      unicodeString: &buffer
+    )
+    return String(utf16CodeUnits: buffer, count: actualLength)
+  }
+
+  private static func isPrintableText(_ text: String) -> Bool {
+    guard !text.isEmpty else { return false }
+    return !["\r", "\n", "\t", "\u{7f}"].contains(text)
+  }
+
+  private static func keyDescription(
+    keyCode: UInt16,
+    text: String,
+    modifiers: NSEvent.ModifierFlags
+  ) -> String {
+    var parts: [String] = []
+    if modifiers.contains(.control) { parts.append("⌃") }
+    if modifiers.contains(.option) { parts.append("⌥") }
+    if modifiers.contains(.shift) { parts.append("⇧") }
+    if modifiers.contains(.command) { parts.append("⌘") }
+    let key: String
+    switch keyCode {
+    case 36: key = "Return"
+    case 48: key = "Tab"
+    case 49: key = "Space"
+    case 51: key = "Delete"
+    case 53: key = "Escape"
+    case 123: key = "Left"
+    case 124: key = "Right"
+    case 125: key = "Down"
+    case 126: key = "Up"
+    default: key = text.isEmpty ? "KeyCode \(keyCode)" : text.uppercased()
+    }
+    parts.append(key)
+    return parts.joined()
+  }
+
+  private static func breadcrumbButton(for event: NSEvent) -> BreadcrumbMouseButton? {
+    switch event.type {
+    case .leftMouseDown: return .left
+    case .rightMouseDown: return .right
+    case .otherMouseDown:
+      if event.buttonNumber == 2 { return .middle }
+      return .other(event.buttonNumber)
+    default: return nil
     }
   }
 

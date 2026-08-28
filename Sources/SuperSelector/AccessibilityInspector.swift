@@ -12,6 +12,7 @@ enum AccessibilityInspector {
 
   private struct AncestorContext {
     var roles: [String] = []
+    var breadcrumbNodes: [AXBreadcrumbNode] = []
     var windowIdentifier: String?
     var windowTitle: String?
   }
@@ -243,7 +244,7 @@ enum AccessibilityInspector {
       snapshot.role == kAXWindowRole
       ? element : elementAttribute(element, kAXWindowAttribute)
     let context =
-      knownAncestorRoles == nil ? ancestorContext(of: element, maximumDepth: 10) : nil
+      knownAncestorRoles == nil ? ancestorContext(of: element, maximumDepth: 24) : nil
     snapshot.windowIdentifier =
       knownWindowIdentifier
       ?? directWindow.flatMap { stringAttribute($0, kAXIdentifierAttribute) }
@@ -275,7 +276,8 @@ enum AccessibilityInspector {
     if AXUIElementCopyActionNames(element, &actions) == .success {
       snapshot.actions = actions as? [String] ?? []
     }
-    snapshot.ancestorRoles = knownAncestorRoles ?? context?.roles ?? []
+    snapshot.ancestorRoles = knownAncestorRoles ?? Array((context?.roles ?? []).prefix(10))
+    snapshot.ancestorBreadcrumbNodes = context?.breadcrumbNodes ?? []
     return snapshot
   }
 
@@ -358,6 +360,14 @@ enum AccessibilityInspector {
       let parent = unsafeBitCast(parentValue, to: AXUIElement.self)
       if let role = stringAttribute(parent, kAXRoleAttribute) {
         context.roles.append(role)
+        context.breadcrumbNodes.append(
+          AXBreadcrumbNode(
+            role: role,
+            title: stringAttribute(parent, kAXTitleAttribute),
+            label: stringAttribute(parent, kAXDescriptionAttribute),
+            value: displayString(attribute(parent, kAXValueAttribute)),
+            identifier: stringAttribute(parent, kAXIdentifierAttribute)
+          ))
         if role == kAXWindowRole, context.windowIdentifier == nil, context.windowTitle == nil {
           context.windowIdentifier = stringAttribute(parent, kAXIdentifierAttribute)
           context.windowTitle = stringAttribute(parent, kAXTitleAttribute)

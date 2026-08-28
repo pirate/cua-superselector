@@ -72,6 +72,15 @@ struct AXElementSnapshot: Sendable {
   var windowFrameInQuartzCoordinates: CGRect?
   var actions: [String] = []
   var ancestorRoles: [String] = []
+  var ancestorBreadcrumbNodes: [AXBreadcrumbNode] = []
+}
+
+struct AXBreadcrumbNode: Sendable, Equatable {
+  var role: String
+  var title: String?
+  var label: String?
+  var value: String?
+  var identifier: String?
 }
 
 struct SceneSnapshot: Sendable {
