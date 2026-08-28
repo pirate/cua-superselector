@@ -1,5 +1,7 @@
 # Cache-able "SuperSelectors" for Computer Use Agents
 
+![SuperSelector recording and replay demo](dist/SuperSelector-breadcrumbs-demo.gif)
+
 `SuperSelectors` are my attempt at giving CUA systems one cachable "visual element selector" string that can carry hints from any source the driver has access to.
 
 Think of it as a fuzzy `xpath` or CSS selector, but for arbitrary things on your screen, not only DOM elements.
