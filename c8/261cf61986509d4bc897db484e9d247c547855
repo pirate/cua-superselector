@@ -1,0 +1,19 @@
+Sources/SuperSelector/main.swift
+  s_83b47f56be2589::t_65d86e05ff1f4a 4,7,11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c8261cf61986509d4bc897db484e9d247c547855",
+  "prompts": {},
+  "sessions": {
+    "s_83b47f56be2589": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffc6f-4642-7bd0-adbf-22536d8118c4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
