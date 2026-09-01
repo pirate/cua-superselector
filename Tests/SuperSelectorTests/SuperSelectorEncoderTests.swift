@@ -546,6 +546,47 @@ final class SuperSelectorEncoderTests: XCTestCase {
     XCTAssertTrue(trail.links.isEmpty)
   }
 
+  func testBreadcrumbScreenshotCacheFollowsPointerAcrossDisplays() {
+    var element = AXElementSnapshot()
+    element.role = "AXGroup"
+    element.title = "Desktop"
+    let firstPoint = CGPoint(x: 100, y: 100)
+    let secondPoint = CGPoint(x: 1_100, y: 100)
+    let firstObservation = observation(with: element, cursorQuartz: firstPoint)
+    let secondObservation = observation(with: element, cursorQuartz: secondPoint)
+    let firstScreenshot = BreadcrumbScreenshot(
+      jpegData: Data([1]),
+      screenFrameQuartz: CGRect(x: 0, y: 0, width: 1_000, height: 1_000)
+    )
+    let secondScreenshot = BreadcrumbScreenshot(
+      jpegData: Data([2]),
+      screenFrameQuartz: CGRect(x: 1_000, y: 0, width: 1_000, height: 1_000)
+    )
+    let start = Date(timeIntervalSince1970: 100)
+
+    var trail = BreadcrumbTrail()
+    trail.updateLive(observation: firstObservation, screenshot: firstScreenshot, at: start)
+    XCTAssertEqual(trail.screenshot(for: firstObservation, at: firstPoint), firstScreenshot)
+    XCTAssertNil(trail.screenshot(for: firstObservation, at: secondPoint))
+
+    trail.updateLive(
+      observation: secondObservation,
+      at: start.addingTimeInterval(0.3)
+    )
+    XCTAssertNil(trail.screenshot(for: secondObservation))
+    XCTAssertTrue(
+      trail.needsScreenshot(for: secondObservation, at: start.addingTimeInterval(0.3)))
+
+    trail.updateLive(
+      observation: secondObservation,
+      screenshot: secondScreenshot,
+      at: start.addingTimeInterval(0.3)
+    )
+    XCTAssertEqual(trail.screenshot(for: secondObservation), secondScreenshot)
+    XCTAssertFalse(
+      trail.needsScreenshot(for: secondObservation, at: start.addingTimeInterval(0.6)))
+  }
+
   func testDoubleEscapeResetRequiresTwoConsecutiveQuickPresses() {
     var detector = DoubleEscapeResetDetector(maximumInterval: 0.8)
     let start = Date(timeIntervalSince1970: 100)

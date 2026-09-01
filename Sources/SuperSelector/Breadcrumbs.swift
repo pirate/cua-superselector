@@ -21,6 +21,16 @@ struct KeyboardHIDEvent: Codable, Sendable, Equatable {
   let virtualKeyCode: UInt16
   let modifierFlags: UInt64
   let text: String
+  let isRepeat: Bool
+
+  init(
+    virtualKeyCode: UInt16, modifierFlags: UInt64, text: String, isRepeat: Bool = false
+  ) {
+    self.virtualKeyCode = virtualKeyCode
+    self.modifierFlags = modifierFlags
+    self.text = text
+    self.isRepeat = isRepeat
+  }
 }
 
 struct PointerHIDEvent: Codable, Sendable, Equatable {
@@ -30,10 +40,17 @@ struct PointerHIDEvent: Codable, Sendable, Equatable {
   let pressure: Double
 }
 
+struct ScrollHIDEvent: Codable, Sendable, Equatable {
+  let modifierFlags: UInt64
+  let hasPreciseDeltas: Bool
+  let isDirectionInvertedFromDevice: Bool
+}
+
 enum BreadcrumbInteraction: Sendable, Equatable {
   case hover(offset: CGPoint)
   case click(button: BreadcrumbMouseButton, offset: CGPoint, hid: PointerHIDEvent? = nil)
-  case scroll(offset: CGPoint, deltaX: CGFloat, deltaY: CGFloat)
+  case scroll(
+    offset: CGPoint, deltaX: CGFloat, deltaY: CGFloat, hid: ScrollHIDEvent? = nil)
   case type(String, events: [KeyboardHIDEvent] = [])
   case key(String, event: KeyboardHIDEvent? = nil)
 }
@@ -93,11 +110,17 @@ struct BreadcrumbTrail: Sendable {
 
   var currentScreenshot: BreadcrumbScreenshot? { liveTarget?.screenshot }
 
-  func screenshot(for observation: SuperSelectorObservation) -> BreadcrumbScreenshot? {
+  func screenshot(
+    for observation: SuperSelectorObservation,
+    at quartzPoint: CGPoint? = nil
+  ) -> BreadcrumbScreenshot? {
     guard liveTarget?.targetIdentity == BreadcrumbRenderer.targetIdentity(for: observation) else {
       return nil
     }
-    return liveTarget?.screenshot
+    guard let screenshot = liveTarget?.screenshot,
+      screenshot.screenFrameQuartz.contains(quartzPoint ?? observation.scene.cursorQuartz)
+    else { return nil }
+    return screenshot
   }
 
   func needsScreenshot(
@@ -107,7 +130,11 @@ struct BreadcrumbTrail: Sendable {
     guard let liveTarget,
       liveTarget.targetIdentity == BreadcrumbRenderer.targetIdentity(for: observation)
     else { return false }
-    return liveTarget.screenshot == nil && date.timeIntervalSince(liveTarget.observedSince) >= 0.18
+    let screenshotFollowsPointer = liveTarget.screenshot?.screenFrameQuartz.contains(
+      observation.scene.cursorQuartz
+    ) == true
+    return !screenshotFollowsPointer
+      && date.timeIntervalSince(liveTarget.observedSince) >= 0.18
   }
 
   var currentLiveLink: LiveSuperSelectorBreadcrumbLink? {
@@ -214,6 +241,7 @@ struct BreadcrumbTrail: Sendable {
     at quartzPoint: CGPoint,
     deltaX: CGFloat,
     deltaY: CGFloat,
+    hid: ScrollHIDEvent? = nil,
     screenshot: BreadcrumbScreenshot? = nil,
     occurredAt: Date = Date()
   ) {
@@ -223,7 +251,8 @@ struct BreadcrumbTrail: Sendable {
     if let tailIndex,
       links[tailIndex].targetIdentity == targetIdentity,
       occurredAt.timeIntervalSince(links[tailIndex].occurredAt) <= 0.35,
-      case .scroll(let offset, let previousX, let previousY) = links[tailIndex].interaction
+      case .scroll(let offset, let previousX, let previousY, let previousHID) =
+        links[tailIndex].interaction
     {
       let previous = links[tailIndex]
       links[tailIndex] = SuperSelectorBreadcrumbLink(
@@ -233,7 +262,8 @@ struct BreadcrumbTrail: Sendable {
         interaction: .scroll(
           offset: offset,
           deltaX: previousX + deltaX,
-          deltaY: previousY + deltaY
+          deltaY: previousY + deltaY,
+          hid: hid ?? previousHID
         ),
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
@@ -249,7 +279,8 @@ struct BreadcrumbTrail: Sendable {
         interaction: .scroll(
           offset: mouseOffset(at: quartzPoint, currentFrame: frame),
           deltaX: deltaX,
-          deltaY: deltaY
+          deltaY: deltaY,
+          hid: hid
         ),
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
@@ -428,7 +459,7 @@ enum BreadcrumbRenderer {
       return mousePath(action: "Hover", offset: offset)
     case .click(let button, let offset, _):
       return mousePath(action: button.displayName, offset: offset)
-    case .scroll(let offset, let deltaX, let deltaY):
+    case .scroll(let offset, let deltaX, let deltaY, _):
       return String(
         format: "[Mouse: Scroll > offset: x=%.0f,y=%.0f > dx=%.1f,dy=%.1f]",
         offset.x,

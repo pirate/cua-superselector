@@ -33,12 +33,10 @@ final class WorkflowIDEModel {
   @ObservationIgnored private var replayTask: Task<Void, Never>?
   @ObservationIgnored private var replayGeneration: UInt = 0
 
-  init() {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("SuperSelector", isDirectory: true)
-    try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-    persistenceURL = base.appendingPathComponent("workflow-log.json")
-    screenshotStore = WorkflowScreenshotStore(baseDirectory: base)
+  init(dataPaths: SuperSelectorDataPaths = .canonical()) {
+    try? dataPaths.prepare()
+    persistenceURL = dataPaths.workflowLog
+    screenshotStore = WorkflowScreenshotStore(directory: dataPaths.screenshots)
     var loaded = (try? SuperSelectorWorkflowLog.read(from: persistenceURL)) ?? .init()
     if !loaded.screenshotAssets.isEmpty {
       // Schema-2 logs originally embedded every JPEG as base64. Move those payloads to
@@ -50,6 +48,7 @@ final class WorkflowIDEModel {
     }
     log = loaded
     selectedWorkflowID = log.workflows.first?.id
+    selectedStepID = selectedWorkflow?.breadcrumbs.last?.id
   }
 
   var selectedWorkflow: SuperSelectorWorkflow? {
@@ -102,7 +101,17 @@ final class WorkflowIDEModel {
   }
 
   func selectStep(_ id: UUID?) {
-    selectedStepID = id
+    selectedStepID = id ?? selectedWorkflow?.breadcrumbs.last?.id
+  }
+
+  func renameWorkflow(_ id: UUID, to name: String) {
+    let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty, let index = log.workflows.firstIndex(where: { $0.id == id }) else {
+      return
+    }
+    log.workflows[index].name = name
+    log.workflows[index].updatedAt = Date()
+    changed("Renamed trail")
   }
 
   func deleteSelected() {
@@ -414,6 +423,8 @@ final class WorkflowIDEWindowController: NSWindowController, NSWindowDelegate {
 private struct WorkflowIDEView: View {
   @Bindable var model: WorkflowIDEModel
   @State private var splitVisibility: NavigationSplitViewVisibility = .all
+  @State private var renameWorkflowID: UUID?
+  @State private var renameText = ""
 
   var body: some View {
     VStack(spacing: 0) {
@@ -432,6 +443,20 @@ private struct WorkflowIDEView: View {
     .navigationTitle("SuperSelector Studio")
     .toolbar { toolbar }
     .textSelection(.enabled)
+    .alert(
+      "Rename Trail",
+      isPresented: Binding(
+        get: { renameWorkflowID != nil },
+        set: { if !$0 { renameWorkflowID = nil } }
+      )
+    ) {
+      TextField("Name", text: $renameText)
+      Button("Cancel", role: .cancel) {}
+      Button("Rename") {
+        if let id = renameWorkflowID { model.renameWorkflow(id, to: renameText) }
+      }
+      .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
   }
 
   private var workflowSidebar: some View {
@@ -446,10 +471,16 @@ private struct WorkflowIDEView: View {
           WorkflowRow(workflow: workflow)
             .tag(workflow.id)
             .contextMenu {
+              Button("Rename…") {
+                model.selectWorkflow(workflow.id)
+                renameWorkflowID = workflow.id
+                renameText = workflow.name
+              }
               Button("Copy JSON") {
                 model.selectWorkflow(workflow.id)
                 model.copySelectedJSON()
               }
+              Divider()
               Button("Delete", role: .destructive) {
                 model.selectWorkflow(workflow.id)
                 model.deleteSelected()
@@ -483,23 +514,30 @@ private struct WorkflowIDEView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
 
+        WorkflowScreenshotTimeline(model: model, workflow: workflow)
         Divider()
-        List(
-          selection: Binding(
-            get: { model.selectedStepID },
-            set: { model.selectStep($0) }
-          )
-        ) {
-          ForEach(Array(workflow.breadcrumbs.enumerated()), id: \.element.id) { index, step in
-            WorkflowStepRow(
-              index: index,
-              step: step,
-              hasScreenshot: step.screenshot != nil,
-              isReplayPosition: model.replayProgress == index
-            ).tag(step.id)
+        ScrollViewReader { proxy in
+          List(
+            selection: Binding(
+              get: { model.selectedStepID },
+              set: { model.selectStep($0) }
+            )
+          ) {
+            ForEach(Array(workflow.breadcrumbs.enumerated()), id: \.element.id) { index, step in
+              WorkflowStepRow(
+                index: index,
+                step: step,
+                hasScreenshot: step.screenshot != nil,
+                isReplayPosition: model.replayProgress == index
+              ).tag(step.id).id(step.id)
+            }
+          }
+          .listStyle(.inset)
+          .onAppear { proxy.scrollTo(model.selectedStepID, anchor: .center) }
+          .onChange(of: model.selectedStepID) { _, id in
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
           }
         }
-        .listStyle(.inset)
         ReplayControlSurface(model: model, stepCount: workflow.breadcrumbs.count)
           .padding(.horizontal, 12)
           .padding(.top, 12)
@@ -634,6 +672,63 @@ private struct WorkflowIDEView: View {
     .padding(.horizontal, 12)
     .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28)
     .background(.bar)
+  }
+}
+
+private struct WorkflowScreenshotTimeline: View {
+  @Bindable var model: WorkflowIDEModel
+  let workflow: SuperSelectorWorkflow
+
+  private var steps: [(Int, SuperSelectorWorkflowStep)] {
+    workflow.breadcrumbs.enumerated().filter { $0.element.screenshot != nil }
+  }
+
+  var body: some View {
+    if !steps.isEmpty {
+      VStack(alignment: .leading, spacing: 7) {
+        Label("Screenshots", systemImage: "timeline.selection")
+          .font(.caption.weight(.semibold))
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal) {
+            LazyHStack(spacing: 8) {
+              ForEach(steps, id: \.1.id) { index, step in
+                Button {
+                  model.selectStep(step.id)
+                } label: {
+                  VStack(alignment: .leading, spacing: 4) {
+                    if let screenshot = step.screenshot,
+                      let data = model.screenshotData(for: screenshot.assetID)
+                    {
+                      WorkflowScreenshotPreview(screenshot: screenshot, imageData: data)
+                        .frame(width: 128, height: 72)
+                    }
+                    Text("\(index + 1). \(step.action.summary)")
+                      .font(.caption2).lineLimit(1).frame(width: 128, alignment: .leading)
+                  }
+                  .padding(4)
+                  .background(
+                    model.selectedStepID == step.id ? Color.pink.opacity(0.14) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8)
+                  )
+                }
+                .buttonStyle(.plain)
+                .id(step.id)
+              }
+            }
+            .scrollTargetLayout()
+          }
+          .scrollIndicators(.hidden)
+          .scrollTargetBehavior(.viewAligned)
+          .onAppear { proxy.scrollTo(model.selectedStepID, anchor: .center) }
+          .onChange(of: model.selectedStepID) { _, id in
+            guard steps.contains(where: { $0.1.id == id }) else { return }
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
+          }
+        }
+      }
+      .padding(.horizontal)
+      .padding(.bottom, 12)
+    }
   }
 }
 

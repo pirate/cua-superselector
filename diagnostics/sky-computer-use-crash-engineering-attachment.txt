@@ -1,0 +1,98 @@
+SANITIZED ENGINEERING DIAGNOSTIC
+SkyComputerUseService accessibility transformation crash
+Captured: 2026-09-01, America/Los_Angeles
+
+PRODUCT / PLATFORM
+- ChatGPT Desktop: 26.818.61809 (build 7019)
+- SkyComputerUseService: 26.823.1000854 (build 1000854)
+- Bundle identifier: com.openai.sky.CUAService
+- Signing team: 2DC432GLL2
+- Architecture: arm64
+- macOS: 26.4.1 (25E253)
+
+HELPER FINGERPRINT
+- Mach-O UUID: E5BA25EC-FD55-3952-9285-FA5D801C2F2B
+- SHA-256: c92c87195fcccb67a51ed7a58882c8effbed3f6ce7a2fa81978f68255ea652c6
+- CDHash: 0ea72902955906de92ae225a060b294b8472650b
+
+FAILURE CATEGORY
+- Sky is observing or transforming a native application's accessibility tree.
+- During capture, accessibility nodes or windows are invalidated, removed,
+  replaced, or reordered.
+- Common triggers include SwiftUI subtree replacement, transient AppKit panel
+  changes, window visibility changes, foreground-app activation, and interaction
+  replay while a state request is in flight.
+- The target application's identity and business logic are not material to the
+  failure; the crash occurs inside SkyComputerUseService.
+
+GENERIC REPRODUCTION SEQUENCE
+1. Launch a native macOS test harness with a dynamic accessibility hierarchy.
+2. Have Codex Computer Use request a full state snapshot of the application.
+3. While the snapshot/AX observer is active, rapidly hide, show, destroy, or
+   reorder windows and panels, and replace one or more SwiftUI view subtrees.
+4. Optionally activate a second native app or begin replaying captured input to
+   increase AX notification and window-tree churn.
+5. Request another full state during the transition and repeat as necessary.
+6. Sky emits repeated TransformedUIElement errors, traps in Array.remove(at:),
+   closes its native pipe, and is relaunched.
+
+OBSERVED FAILURE
+- Thirteen reports in approximately 16 minutes had the same failure fingerprint.
+- Exception: EXC_BREAKPOINT / SIGTRAP
+- Termination: SIGNAL 5, Trace/BPT trap
+- Faulting queue: com.apple.root.user-initiated-qos.cooperative
+- Swift runtime message: Swift/Array.swift:1350: Fatal error: Index out of range
+- Immediately preceding the trap, the faulting worker emitted repeated:
+  Error Domain=AccessibilitySupport.UIElementError Code=0
+  subsystem/category: inc.software.app / TransformedUIElement
+- Latest independent confirmations:
+  - 15:02:33, helper PID 13705: same exception and normalized stack
+  - 15:05:00, helper PID 17971: same exception and normalized stack
+  Both were fresh helper launches using the same binary fingerprint. There is no
+  signature drift or evidence of a second failure mode in these reports.
+
+TOP CRASH STACK
+0  libswiftCore  closure in _assertionFailure
+1  libswiftCore  _assertionFailure
+2  libswiftCore  Array.remove(at:)
+3  SkyComputerUseService + 6468864
+4  SkyComputerUseService + 7422076
+5  SkyComputerUseService + 6437944
+6  SkyComputerUseService + 6437288
+7  SkyComputerUseService + 6441632
+8  libswiftCore  Sequence._compactMap
+9  libswiftCore  Sequence.compactMap
+
+Frames 3-9 repeat while the service transforms the accessibility hierarchy.
+The inspected applications remain alive; the process that terminates is
+SkyComputerUseService.
+
+LIKELY FAILURE BOUNDARY
+This is consistent with stale collection bookkeeping while an AX tree revision
+is being transformed or invalidated. AX reads fail during window/app churn, but
+the transformer later removes an element using an index that is no longer valid.
+This is a Sky-side resilience defect: ordinary AX invalidation should not be able
+to terminate the service.
+
+REQUESTED DEFENSIVE FIX
+- Snapshot children before transforming them, or serialize transformation and
+  invalidation updates per target/tree generation.
+- Revalidate an index and tree revision before collection removal.
+- Drop, re-resolve, or retry stale AX nodes after UIElementError instead of
+  continuing with partially mutated bookkeeping.
+- Bound/cycle-check traversal and prune only the invalid subtree.
+- Return screenshot-only or partial accessibility state if transformation fails.
+- Add a generic regression test that invalidates, removes, and reorders native
+  accessibility nodes and windows while a snapshot is in progress.
+
+RELATED PUBLIC REPORTS
+- https://github.com/openai/codex/issues/32293
+  Same TransformedUIElement-to-Array.remove(at:) bounds-trap class.
+- https://github.com/openai/codex/issues/34432
+  Same SIGTRAP during SwiftUI AX traversal/invalidation.
+
+PRIVACY
+Application names, persistent crash-reporter keys, incident identifiers, local
+user paths, session transcripts, and screenshots have been omitted. Raw .ips
+reports are retained locally and can be shared through a private authenticated
+support channel.

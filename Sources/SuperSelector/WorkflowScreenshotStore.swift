@@ -5,8 +5,8 @@ import Foundation
 final class WorkflowScreenshotStore {
   private let directory: URL
 
-  init(baseDirectory: URL) {
-    directory = baseDirectory.appendingPathComponent("screenshots", isDirectory: true)
+  init(directory: URL) {
+    self.directory = directory
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   }
 

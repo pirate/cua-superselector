@@ -346,6 +346,7 @@ final class OverlayCoordinator {
   )
   var onSelectorCaptured: ((String, BreadcrumbTrail) -> Void)?
   var onScreenshotCaptureVisibilityChanged: ((Bool) -> Void)?
+  var onScreenshotCaptureAccessUnavailable: (() -> Void)?
   var onRecordingEnded: (() -> Void)?
   private let crosshairPanel: NSPanel
   private var targetEdgePanels: [NSPanel] = []
@@ -374,6 +375,8 @@ final class OverlayCoordinator {
   private var isRecordingEnabled = true
   private var isReplayVisualizationActive = false
   private var isCapturingScreenshot = false
+  private var didRequestScreenCaptureAccess = false
+  private var didReportMissingScreenCaptureAccess = false
   private var recordingControlsVisible = false
 
   init() {
@@ -449,6 +452,7 @@ final class OverlayCoordinator {
     if !AXIsProcessTrusted() {
       AccessibilityInspector.requestTrustPrompt()
     }
+    requestScreenCaptureAccessIfNeeded()
     if !isSuppressed {
       crosshairPanel.orderFrontRegardless()
       inspectorPanel.orderFrontRegardless()
@@ -493,12 +497,18 @@ final class OverlayCoordinator {
       let point = event.cgEvent?.location ?? CGEvent(source: nil)?.location
       let deltaX = event.scrollingDeltaX
       let deltaY = event.scrollingDeltaY
+      let hid = ScrollHIDEvent(
+        modifierFlags: UInt64(event.modifierFlags.rawValue),
+        hasPreciseDeltas: event.hasPreciseScrollingDeltas,
+        isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
+      )
       DispatchQueue.main.async {
         guard let self, !self.isSuppressed, self.isRecordingEnabled, let point else { return }
         self.recordScroll(
           at: point,
           deltaX: deltaX,
-          deltaY: deltaY
+          deltaY: deltaY,
+          hid: hid
         )
       }
     }
@@ -751,7 +761,7 @@ final class OverlayCoordinator {
         button: button,
         at: quartzPoint,
         hid: hid,
-        screenshot: captureBreadcrumbScreenshot(for: anchor)
+        screenshot: captureBreadcrumbScreenshot(at: quartzPoint)
       )
       refreshInspector()
     }
@@ -777,7 +787,7 @@ final class OverlayCoordinator {
           button: request.button,
           at: request.quartzPoint,
           hid: request.hid,
-          screenshot: captureBreadcrumbScreenshot(for: observation)
+          screenshot: captureBreadcrumbScreenshot(at: request.quartzPoint)
         )
         refreshInspector()
       }
@@ -802,6 +812,11 @@ final class OverlayCoordinator {
       guard let self else { return }
       if isRecordingEnabled {
         breadcrumbTrail.updateLive(observation: observation)
+        if breadcrumbTrail.needsScreenshot(for: observation),
+          let screenshot = captureBreadcrumbScreenshot(at: observation.scene.cursorQuartz)
+        {
+          breadcrumbTrail.updateLive(observation: observation, screenshot: screenshot)
+        }
       }
       latestObservation = observation
       refreshInspector()
@@ -825,17 +840,23 @@ final class OverlayCoordinator {
     )
   }
 
-  private func captureBreadcrumbScreenshot(
-    for observation: SuperSelectorObservation
-  ) -> BreadcrumbScreenshot? {
+  private func captureBreadcrumbScreenshot(at quartzPoint: CGPoint) -> BreadcrumbScreenshot? {
+    guard CGPreflightScreenCaptureAccess() else {
+      requestScreenCaptureAccessIfNeeded()
+      reportMissingScreenCaptureAccessIfNeeded()
+      return nil
+    }
     guard !isCapturingScreenshot else { return nil }
     isCapturingScreenshot = true
-    let cursor = observation.scene.cursorAppKit
-    guard let screen = NSScreen.screens.first(where: { $0.frame.contains(cursor) }) else {
+    var displayID = CGDirectDisplayID()
+    var displayCount: UInt32 = 0
+    guard CGGetDisplaysWithPoint(quartzPoint, 1, &displayID, &displayCount) == .success,
+      displayCount > 0
+    else {
       isCapturingScreenshot = false
       return nil
     }
-    let screenFrameQuartz = CoordinateSpaces.quartzRect(fromAppKit: screen.frame)
+    let screenFrameQuartz = CGDisplayBounds(displayID)
     let overlayPanels = [crosshairPanel] + targetEdgePanels + [recordingControlPanel]
     let visiblePanels = overlayPanels.filter(\.isVisible)
     let inspectorWasVisible = inspectorPanel.isVisible
@@ -870,6 +891,20 @@ final class OverlayCoordinator {
       )
     else { return nil }
     return BreadcrumbScreenshot(jpegData: data, screenFrameQuartz: screenFrameQuartz)
+  }
+
+  private func requestScreenCaptureAccessIfNeeded() {
+    guard !CGPreflightScreenCaptureAccess(), !didRequestScreenCaptureAccess else { return }
+    didRequestScreenCaptureAccess = true
+    if !CGRequestScreenCaptureAccess() {
+      reportMissingScreenCaptureAccessIfNeeded()
+    }
+  }
+
+  private func reportMissingScreenCaptureAccessIfNeeded() {
+    guard !didReportMissingScreenCaptureAccess else { return }
+    didReportMissingScreenCaptureAccess = true
+    onScreenshotCaptureAccessUnavailable?()
   }
 
   private static func downsample(_ image: CGImage, maximumPixelSize: Int) -> CGImage? {
@@ -982,7 +1017,7 @@ final class OverlayCoordinator {
     text: String,
     modifiers: NSEvent.ModifierFlags
   ) {
-    guard !isRepeat, isRecordingEnabled else { return }
+    guard isRecordingEnabled else { return }
     if keyCode == 53 {
       if escapeResetDetector.registerEscape() {
         breadcrumbTrail.reset()
@@ -993,15 +1028,17 @@ final class OverlayCoordinator {
     escapeResetDetector.registerOtherKey()
     guard !isSuppressed, let observation = latestObservation else { return }
     if Self.modifierKeyCodes.contains(keyCode) { return }
+    let screenshotPoint = CGEvent(source: nil)?.location ?? observation.scene.cursorQuartz
     let screenshot =
-      breadcrumbTrail.screenshot(for: observation)
-      ?? captureBreadcrumbScreenshot(for: observation)
+      breadcrumbTrail.screenshot(for: observation, at: screenshotPoint)
+      ?? captureBreadcrumbScreenshot(at: screenshotPoint)
 
     let independentModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
     let hidEvent = KeyboardHIDEvent(
       virtualKeyCode: keyCode,
       modifierFlags: UInt64(independentModifiers.rawValue),
-      text: text
+      text: text,
+      isRepeat: isRepeat
     )
     let isCommand =
       independentModifiers.contains(.command)
@@ -1020,7 +1057,9 @@ final class OverlayCoordinator {
     refreshInspector()
   }
 
-  private func recordScroll(at point: CGPoint, deltaX: CGFloat, deltaY: CGFloat) {
+  private func recordScroll(
+    at point: CGPoint, deltaX: CGFloat, deltaY: CGFloat, hid: ScrollHIDEvent
+  ) {
     guard isRecordingEnabled,
       abs(deltaX) > 0.01 || abs(deltaY) > 0.01,
       let observation = recentBreadcrumbObservation(at: point) ?? latestObservation
@@ -1030,8 +1069,9 @@ final class OverlayCoordinator {
       at: point,
       deltaX: deltaX,
       deltaY: deltaY,
-      screenshot: breadcrumbTrail.screenshot(for: observation)
-        ?? captureBreadcrumbScreenshot(for: observation)
+      hid: hid,
+      screenshot: breadcrumbTrail.screenshot(for: observation, at: point)
+        ?? captureBreadcrumbScreenshot(at: point)
     )
     refreshInspector()
   }

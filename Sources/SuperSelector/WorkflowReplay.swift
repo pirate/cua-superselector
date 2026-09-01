@@ -102,6 +102,11 @@ final class MacWorkflowReplayer {
         wheel3: 0
       )
       event?.location = point
+      if let hid = action.scrollEvent {
+        event?.flags = CGEventFlags(rawValue: hid.modifierFlags)
+        event?.setIntegerValueField(
+          .scrollWheelEventIsContinuous, value: hid.hasPreciseDeltas ? 1 : 0)
+      }
       event?.post(tap: .cghidEventTap)
     case .type:
       if let events = action.keyboardEvents, !events.isEmpty {

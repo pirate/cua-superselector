@@ -214,6 +214,7 @@ struct SuperSelectorWorkflowAction: Codable, Equatable, Sendable {
   var value: String?
   var keyboardEvents: [KeyboardHIDEvent]?
   var pointerEvent: PointerHIDEvent?
+  var scrollEvent: ScrollHIDEvent?
 
   init(_ interaction: BreadcrumbInteraction) {
     switch interaction {
@@ -223,9 +224,10 @@ struct SuperSelectorWorkflowAction: Codable, Equatable, Sendable {
       self.init(
         kind: .click, offset: WorkflowPoint(point), button: button.storageName,
         pointerEvent: hid)
-    case .scroll(let point, let deltaX, let deltaY):
+    case .scroll(let point, let deltaX, let deltaY, let hid):
       self.init(
-        kind: .scroll, offset: WorkflowPoint(point), deltaX: deltaX, deltaY: deltaY)
+        kind: .scroll, offset: WorkflowPoint(point), deltaX: deltaX, deltaY: deltaY,
+        scrollEvent: hid)
     case .type(let text, let events):
       self.init(kind: .type, value: text, keyboardEvents: events)
     case .key(let key, let event):
@@ -236,7 +238,8 @@ struct SuperSelectorWorkflowAction: Codable, Equatable, Sendable {
   init(
     kind: Kind, offset: WorkflowPoint? = nil, button: String? = nil,
     deltaX: Double? = nil, deltaY: Double? = nil, value: String? = nil,
-    keyboardEvents: [KeyboardHIDEvent]? = nil, pointerEvent: PointerHIDEvent? = nil
+    keyboardEvents: [KeyboardHIDEvent]? = nil, pointerEvent: PointerHIDEvent? = nil,
+    scrollEvent: ScrollHIDEvent? = nil
   ) {
     self.kind = kind
     self.offset = offset
@@ -246,6 +249,7 @@ struct SuperSelectorWorkflowAction: Codable, Equatable, Sendable {
     self.value = value
     self.keyboardEvents = keyboardEvents
     self.pointerEvent = pointerEvent
+    self.scrollEvent = scrollEvent
   }
 }
 

@@ -16,7 +16,7 @@ private final class StatusItemHoverObserver: NSResponder {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var overlay: OverlayCoordinator?
-  private let workflowModel = WorkflowIDEModel()
+  private let workflowModel: WorkflowIDEModel
   private var ideWindowController: WorkflowIDEWindowController?
   private var statusItem: NSStatusItem?
   private var statusItemHoverObserver: StatusItemHoverObserver?
@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     return formatter
   }()
 
+  init(dataPaths: SuperSelectorDataPaths) {
+    workflowModel = WorkflowIDEModel(dataPaths: dataPaths)
+    super.init()
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     installStatusItem()
@@ -37,6 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     coordinator.onScreenshotCaptureVisibilityChanged = { [weak self] hidden in
       self?.statusItem?.isVisible = !hidden
+    }
+    coordinator.onScreenshotCaptureAccessUnavailable = { [weak self] in
+      self?.workflowModel.status =
+        "Screen Recording permission is required for workflow screenshots; grant it and reopen SuperSelector"
+      DispatchQueue.main.async { [weak self] in
+        self?.presentScreenCaptureAccessAlert()
+      }
     }
     overlay = coordinator
     installIDE(coordinator: coordinator)
@@ -191,6 +203,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     return title.count <= 100 ? title : String(title.prefix(99)) + "…"
   }
 
+  private func presentScreenCaptureAccessAlert() {
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "Allow Screen Recording for workflow screenshots"
+    alert.informativeText =
+      "Without Screen Recording access, macOS removes app windows and Desktop icons from captures. Enable SuperSelector under Privacy & Security → Screen & System Audio Recording, then quit and reopen the app."
+    alert.addButton(withTitle: "Open Screen Recording Settings")
+    alert.addButton(withTitle: "Not Now")
+    NSApp.activate(ignoringOtherApps: true)
+    guard alert.runModal() == .alertFirstButtonReturn,
+      let settingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    else { return }
+    NSWorkspace.shared.open(settingsURL)
+  }
+
   @objc private func quit() {
     NSApp.terminate(nil)
   }
@@ -305,8 +333,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 MainActor.assumeIsolated {
-  let app = NSApplication.shared
-  let delegate = AppDelegate()
-  app.delegate = delegate
-  app.run()
+  let dataPaths = SuperSelectorDataPaths.canonical()
+  do {
+    try dataPaths.prepare()
+    let instanceLock = try SuperSelectorInstanceLock(lockFile: dataPaths.instanceLock)
+    let app = NSApplication.shared
+    let delegate = AppDelegate(dataPaths: dataPaths)
+    app.delegate = delegate
+    withExtendedLifetime((delegate, instanceLock)) {
+      app.run()
+    }
+  } catch SuperSelectorInstanceLockError.alreadyRunning(let ownerPID) {
+    let existing = ownerPID.flatMap(NSRunningApplication.init(processIdentifier:))
+      ?? NSRunningApplication.runningApplications(
+        withBundleIdentifier: "com.local.SuperSelector"
+      ).first
+    existing?.activate(options: [.activateAllWindows])
+  } catch {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    app.activate(ignoringOtherApps: true)
+    NSAlert(error: error).runModal()
+  }
 }

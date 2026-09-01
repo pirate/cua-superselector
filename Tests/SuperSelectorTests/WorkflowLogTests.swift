@@ -32,7 +32,7 @@ final class WorkflowLogTests: XCTestCase {
     let base = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: base) }
-    let store = WorkflowScreenshotStore(baseDirectory: base)
+    let store = WorkflowScreenshotStore(directory: base.appendingPathComponent("screenshots"))
     let retainedID = UUID()
     let removedID = UUID()
     try store.store(WorkflowScreenshotAsset(id: retainedID, jpegData: Data([1, 2, 3])))
@@ -42,6 +42,40 @@ final class WorkflowLogTests: XCTestCase {
     store.prune(retaining: [retainedID])
     XCTAssertEqual(store.data(for: retainedID), Data([1, 2, 3]))
     XCTAssertNil(store.data(for: removedID))
+  }
+
+  func testCanonicalDataPathsDeriveEveryPersistentLocationFromOneRoot() {
+    let root = URL(fileURLWithPath: "/tmp/superselector-test-root", isDirectory: true)
+    let paths = SuperSelectorDataPaths(rootDirectory: root)
+
+    XCTAssertEqual(paths.rootDirectory, root)
+    XCTAssertEqual(paths.workflowLog, root.appendingPathComponent("workflow-log.json"))
+    XCTAssertEqual(
+      paths.screenshots,
+      root.appendingPathComponent("screenshots", isDirectory: true)
+    )
+    XCTAssertEqual(paths.instanceLock, root.appendingPathComponent("instance.lock"))
+  }
+
+  func testCanonicalDataDirectoryAllowsOnlyOneWriterProcess() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = SuperSelectorDataPaths(rootDirectory: root)
+    try paths.prepare()
+
+    var firstLock: SuperSelectorInstanceLock? = try SuperSelectorInstanceLock(
+      lockFile: paths.instanceLock)
+    XCTAssertNotNil(firstLock)
+    XCTAssertThrowsError(try SuperSelectorInstanceLock(lockFile: paths.instanceLock)) { error in
+      guard case SuperSelectorInstanceLockError.alreadyRunning(let ownerPID) = error else {
+        return XCTFail("Unexpected lock error: \(error)")
+      }
+      XCTAssertEqual(ownerPID, getpid())
+    }
+
+    firstLock = nil
+    XCTAssertNoThrow(try SuperSelectorInstanceLock(lockFile: paths.instanceLock))
   }
 
   func testJSONRoundTripAndFileImportExport() throws {
