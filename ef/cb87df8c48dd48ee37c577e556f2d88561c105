@@ -1,0 +1,88 @@
+Sources/SuperSelector/Breadcrumbs.swift
+  s_70f3b9f9b115f4::t_bd1239497bd0c6 113-116,120-123,133-137
+  s_83b47f56be2589::t_be89154b0d0230 43-48,52-53,244,254-255,265-266,282-283,462
+  s_83b47f56be2589::t_8649c3e48505ad 24-33
+Sources/SuperSelector/WorkflowScreenshotStore.swift
+  s_1bdff11c49a8d8::t_8f4d4604a22c21 8-9
+Sources/SuperSelector/WorkflowLog.swift
+  s_83b47f56be2589::t_be89154b0d0230 217,227,229-230,241-242,252
+Sources/SuperSelector/WorkflowReplay.swift
+  s_83b47f56be2589::t_be89154b0d0230 105-109
+Sources/SuperSelector/WorkflowIDE.swift
+  s_d6f933f6bc0887::t_1c5df16aba578d 109-111,446-452
+  s_1bdff11c49a8d8::t_8f4d4604a22c21 36-39
+  s_d6f933f6bc0887::t_58b7ee143f140e 51,104-108,112-114,426-427,453-459,474-478,483,517,678-690,707,713,716-717,726-732
+  s_d6f933f6bc0887::t_39291b65c093ae 519-538,691-706,708-712,714-715,718-725
+  s_1bdff11c49a8d8::t_b19e0cf73a0abc 733-734
+Sources/SuperSelector/main.swift
+  s_1bdff11c49a8d8::t_8f4d4604a22c21 19,31-35,220,336-357
+  s_70f3b9f9b115f4::t_63ecd5d7aac975 49-51,206-219
+  s_70f3b9f9b115f4::t_bd1239497bd0c6 46-48,52
+  s_1bdff11c49a8d8::t_9306d4a7a654d4 221
+diagnostics/sky-computer-use-crash-email-draft.md
+  s_f17a4b8afc2e6a::t_ca6b93661008ca 1-30
+Sources/SuperSelector/Overlay.swift
+  s_83b47f56be2589::t_8649c3e48505ad 1020,1040-1041
+  s_70f3b9f9b115f4::t_2376f2da369bf0 1031,1033-1034
+  s_70f3b9f9b115f4::t_bd1239497bd0c6 349,378-379,455,764,790,815-819,843-848,851-855,859,896-908,1073-1074
+  s_83b47f56be2589::t_be89154b0d0230 500-504,510-511,1060-1062,1072
+  s_d6f933f6bc0887::t_5ffe698c5cbac5 909
+Sources/SuperSelector/ApplicationData.swift
+  s_1bdff11c49a8d8::t_8f4d4604a22c21 1-101
+Tests/SuperSelectorTests/SuperSelectorEncoderTests.swift
+  s_70f3b9f9b115f4::t_2376f2da369bf0 549-589
+diagnostics/sky-computer-use-crash-engineering-attachment.txt
+  s_f17a4b8afc2e6a::t_ca6b93661008ca 1-98
+Tests/SuperSelectorTests/WorkflowLogTests.swift
+  s_1bdff11c49a8d8::t_999a593910aab9 53-56,69
+  s_1bdff11c49a8d8::t_8f4d4604a22c21 35,47-52,57-68,70-79
+  s_1bdff11c49a8d8::t_1832c8e90df135 80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "efcb87df8c48dd48ee37c577e556f2d88561c105",
+  "prompts": {},
+  "sessions": {
+    "s_1bdff11c49a8d8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05efe-b0cf-7742-be83-b1d20611f87f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    },
+    "s_70f3b9f9b115f4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05eef-c692-78f3-976a-4e4eea89811c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    },
+    "s_83b47f56be2589": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffc6f-4642-7bd0-adbf-22536d8118c4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    },
+    "s_d6f933f6bc0887": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05efa-895c-78b3-b4e0-a99965ebe804",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    },
+    "s_f17a4b8afc2e6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ef8-b244-7c93-afa8-2ba954b0e26a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
