@@ -159,6 +159,37 @@ The app now includes a compact workflow IDE for debugging selectors as computer-
 - replay the complete workflow or replay only through a selected point in time;
 - copy or import a workflow log as JSON, or import/export it as a file.
 
+#### Studio tour
+
+The three-column Studio keeps saved trails, the action timeline, and the selected step's evidence visible together. The JSON editor stays unloaded until requested so large histories remain responsive.
+
+<p align="center">
+  <img width="100%" alt="SuperSelector Studio showing recorded trails, an action timeline, the human-readable script, final selector, and replay controls" src="docs/media/studio-overview.png" />
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img width="100%" alt="SuperSelector Studio empty state before recording a workflow" src="docs/media/studio-empty-state.png" />
+      <br /><sub><b>Start clean.</b> Create a trail from the toolbar, then click, type, or scroll in another app.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img width="100%" alt="SuperSelector Studio selected step with annotated screenshot and human-readable script" src="docs/media/studio-step-detail.png" />
+      <br /><sub><b>Inspect any step.</b> Timeline actions retain an annotated screenshot, semantic target, readable script, and exact selector.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img width="100%" alt="SuperSelector recording controls and visual inspector with application identity tree and coordinate map" src="docs/media/recording-inspector.png" />
+      <br /><sub><b>Record without losing context.</b> Reset, pause, or end from the floating recorder while the inspector visualizes provenance, semantic identity, capabilities, and coordinate spaces.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img width="100%" alt="SuperSelector replay controls for full replay, replay to a selected step, and speed adjustment" src="docs/media/studio-replay-controls.png" />
+      <br /><sub><b>Replay forward in time.</b> Run the whole trail or stop at the selected step, with an adjustable visualization delay.</sub>
+    </td>
+  </tr>
+</table>
+
 Time travel is intentionally forward-only. Before replay, the runner normalizes the desktop by hiding regular applications and activating Finder, then replays from the first recorded action through the chosen step. Each resolved breadcrumb is previewed with the pink outline and crosshairs before its action, without obscuring the target with the inspector panel; the Studio speed control adjusts that preview delay. The runner activates each target application from stable bundle or path hints and resolves the target again from accessibility hints; it does not undo actions or click stale coordinates. If the resolver cannot identify one safe target, replay stops and the Studio reports the failure instead of guessing.
 
 The Studio uses native split navigation, toolbars, inspectors, and tables. On macOS 26 its replay controls adopt Liquid Glass, with a material fallback on macOS 14–15.
