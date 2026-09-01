@@ -21,7 +21,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
-    <true/>
+    <false/>
     <key>NSAccessibilityUsageDescription</key>
     <string>SuperSelector inspects the accessibility element under the pointer to generate reusable UI hints.</string>
 </dict>

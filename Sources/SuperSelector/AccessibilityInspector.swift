@@ -3,9 +3,26 @@ import ApplicationServices
 import Foundation
 
 enum AccessibilityInspector {
+  private final class SemanticAttributesBox {
+    let value: [String: String]
+    let capturedAt: TimeInterval
+    init(_ value: [String: String], capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime)
+    {
+      self.value = value
+      self.capturedAt = capturedAt
+    }
+  }
+
+  private static let semanticAttributesCache: NSCache<NSString, SemanticAttributesBox> = {
+    let cache = NSCache<NSString, SemanticAttributesBox>()
+    cache.countLimit = 4_096
+    return cache
+  }()
+
   private struct TraversalNode {
     let element: AXUIElement
     let ancestorRoles: [String]
+    let ancestorBreadcrumbNodes: [AXBreadcrumbNode]
     let windowIdentifier: String?
     let windowTitle: String?
   }
@@ -100,6 +117,7 @@ enum AccessibilityInspector {
           TraversalNode(
             element: window,
             ancestorRoles: [kAXApplicationRole],
+            ancestorBreadcrumbNodes: [],
             windowIdentifier: stringAttribute(window, kAXIdentifierAttribute),
             windowTitle: stringAttribute(window, kAXTitleAttribute)
           )
@@ -109,6 +127,7 @@ enum AccessibilityInspector {
           TraversalNode(
             element: root,
             ancestorRoles: [],
+            ancestorBreadcrumbNodes: [],
             windowIdentifier: nil,
             windowTitle: nil
           )
@@ -118,6 +137,7 @@ enum AccessibilityInspector {
             TraversalNode(
               element: window,
               ancestorRoles: [kAXApplicationRole],
+              ancestorBreadcrumbNodes: [],
               windowIdentifier: stringAttribute(window, kAXIdentifierAttribute),
               windowTitle: stringAttribute(window, kAXTitleAttribute)
             ))
@@ -153,6 +173,7 @@ enum AccessibilityInspector {
           let candidate = snapshot(
             from: node.element,
             ancestorRoles: node.ancestorRoles,
+            ancestorBreadcrumbNodes: node.ancestorBreadcrumbNodes,
             windowIdentifier: nodeWindowIdentifier,
             windowTitle: nodeWindowTitle
           ), candidate.frameInQuartzCoordinates != nil
@@ -162,11 +183,17 @@ enum AccessibilityInspector {
 
         let childAncestors = Array(
           ((nodeRole.map { [$0] } ?? []) + node.ancestorRoles).prefix(10))
-        for child in descendants(of: node.element) {
+        let children = descendants(of: node.element)
+        guard !children.isEmpty else { continue }
+        let childBreadcrumbs = Array(
+          ((breadcrumbNode(from: node.element, forceSemanticRefresh: true).map { [$0] } ?? [])
+            + node.ancestorBreadcrumbNodes).prefix(24))
+        for child in children {
           queue.append(
             TraversalNode(
               element: child,
               ancestorRoles: childAncestors,
+              ancestorBreadcrumbNodes: childBreadcrumbs,
               windowIdentifier: nodeWindowIdentifier,
               windowTitle: nodeWindowTitle
             ))
@@ -223,6 +250,7 @@ enum AccessibilityInspector {
   private static func snapshot(
     from element: AXUIElement,
     ancestorRoles knownAncestorRoles: [String]? = nil,
+    ancestorBreadcrumbNodes knownAncestorBreadcrumbNodes: [AXBreadcrumbNode]? = nil,
     windowIdentifier knownWindowIdentifier: String? = nil,
     windowTitle knownWindowTitle: String? = nil
   ) -> AXElementSnapshot? {
@@ -277,7 +305,8 @@ enum AccessibilityInspector {
       snapshot.actions = actions as? [String] ?? []
     }
     snapshot.ancestorRoles = knownAncestorRoles ?? Array((context?.roles ?? []).prefix(10))
-    snapshot.ancestorBreadcrumbNodes = context?.breadcrumbNodes ?? []
+    snapshot.ancestorBreadcrumbNodes =
+      knownAncestorBreadcrumbNodes ?? context?.breadcrumbNodes ?? []
     return snapshot
   }
 
@@ -358,24 +387,128 @@ enum AccessibilityInspector {
         CFGetTypeID(parentValue) == AXUIElementGetTypeID()
       else { break }
       let parent = unsafeBitCast(parentValue, to: AXUIElement.self)
-      if let role = stringAttribute(parent, kAXRoleAttribute) {
-        context.roles.append(role)
-        context.breadcrumbNodes.append(
-          AXBreadcrumbNode(
-            role: role,
-            title: stringAttribute(parent, kAXTitleAttribute),
-            label: stringAttribute(parent, kAXDescriptionAttribute),
-            value: displayString(attribute(parent, kAXValueAttribute)),
-            identifier: stringAttribute(parent, kAXIdentifierAttribute)
-          ))
-        if role == kAXWindowRole, context.windowIdentifier == nil, context.windowTitle == nil {
-          context.windowIdentifier = stringAttribute(parent, kAXIdentifierAttribute)
-          context.windowTitle = stringAttribute(parent, kAXTitleAttribute)
+      if let breadcrumb = breadcrumbNode(from: parent) {
+        context.roles.append(breadcrumb.role)
+        context.breadcrumbNodes.append(breadcrumb)
+        if breadcrumb.role == kAXWindowRole, context.windowIdentifier == nil,
+          context.windowTitle == nil
+        {
+          context.windowIdentifier = breadcrumb.identifier
+          context.windowTitle = breadcrumb.title
         }
       }
       current = parent
     }
     return context
+  }
+
+  private static func breadcrumbNode(
+    from element: AXUIElement, forceSemanticRefresh: Bool = false
+  ) -> AXBreadcrumbNode? {
+    guard let role = stringAttribute(element, kAXRoleAttribute) else { return nil }
+    let title = stringAttribute(element, kAXTitleAttribute)
+    let label = stringAttribute(element, kAXDescriptionAttribute)
+    let help = stringAttribute(element, kAXHelpAttribute)
+    let value = displayString(attribute(element, kAXValueAttribute))
+    let identifier = stringAttribute(element, kAXIdentifierAttribute)
+    let needsSemanticFallback = [title, label, help, value, identifier].allSatisfy {
+      $0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+    }
+    return AXBreadcrumbNode(
+      role: role,
+      subrole: stringAttribute(element, kAXSubroleAttribute),
+      roleDescription: stringAttribute(element, kAXRoleDescriptionAttribute),
+      title: title,
+      label: label,
+      help: help,
+      value: value,
+      identifier: identifier,
+      semanticAttributes: needsSemanticFallback
+        ? semanticAttributes(of: element, forceRefresh: forceSemanticRefresh) : [:]
+    )
+  }
+
+  private static func semanticAttributes(
+    of element: AXUIElement, forceRefresh: Bool = false
+  ) -> [String: String] {
+    var processIdentifier: pid_t = 0
+    AXUIElementGetPid(element, &processIdentifier)
+    let cacheKey = "\(processIdentifier):\(CFHash(element))" as NSString
+    let now = ProcessInfo.processInfo.systemUptime
+    if !forceRefresh, let cached = semanticAttributesCache.object(forKey: cacheKey),
+      now - cached.capturedAt < 1
+    {
+      return cached.value
+    }
+    var namesValue: CFArray?
+    guard AXUIElementCopyAttributeNames(element, &namesValue) == .success,
+      let names = namesValue as? [String]
+    else {
+      semanticAttributesCache.setObject(SemanticAttributesBox([:]), forKey: cacheKey)
+      return [:]
+    }
+    let semanticNames = names.filter { name in
+      let lowered = name.lowercased()
+      return lowered.contains("dom") || lowered.contains("aria")
+        || lowered.contains("identifier") || lowered.contains("placeholder")
+        || lowered.contains("description") || lowered.contains("help")
+        || lowered.contains("title") || lowered.contains("url")
+        || lowered.contains("document") || lowered.contains("class")
+        || lowered.contains("label") || lowered.contains("name")
+        || lowered.contains("customcontent")
+    }
+    var result: [String: String] = [:]
+    for name in semanticNames.prefix(32) {
+      guard let rawValue = attribute(element, name), let value = semanticString(rawValue) else {
+        continue
+      }
+      result[name] = value.count > 512 ? String(value.prefix(511)) + "…" : value
+    }
+    semanticAttributesCache.setObject(SemanticAttributesBox(result), forKey: cacheKey)
+    return result
+  }
+
+  private static func semanticString(_ value: CFTypeRef) -> String? {
+    if CFGetTypeID(value) == CFStringGetTypeID() {
+      guard let string = value as? String else { return nil }
+      let cleaned = string.trimmingCharacters(in: .whitespacesAndNewlines)
+      return cleaned.isEmpty ? nil : cleaned
+    }
+    if CFGetTypeID(value) == CFURLGetTypeID() {
+      return (value as? URL)?.absoluteString
+    }
+    if CFGetTypeID(value) == AXUIElementGetTypeID() {
+      return semanticText(of: unsafeBitCast(value, to: AXUIElement.self))
+    }
+    if CFGetTypeID(value) == CFArrayGetTypeID(), let values = value as? [Any] {
+      let strings = values.compactMap { item -> String? in
+        if let string = item as? String {
+          let cleaned = string.trimmingCharacters(in: .whitespacesAndNewlines)
+          return cleaned.isEmpty ? nil : cleaned
+        }
+        let rawItem = item as CFTypeRef
+        if CFGetTypeID(rawItem) == AXUIElementGetTypeID() {
+          return semanticText(of: unsafeBitCast(rawItem, to: AXUIElement.self))
+        }
+        return nil
+      }
+      return strings.isEmpty ? nil : strings.prefix(16).joined(separator: " ")
+    }
+    return nil
+  }
+
+  private static func semanticText(of element: AXUIElement) -> String? {
+    for attributeName in [
+      kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueAttribute,
+      kAXIdentifierAttribute,
+    ] {
+      if let value = displayString(attribute(element, attributeName))?
+        .trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
+      {
+        return value
+      }
+    }
+    return nil
   }
 
   private static func rootWindows(of application: AXUIElement) -> [AXUIElement] {

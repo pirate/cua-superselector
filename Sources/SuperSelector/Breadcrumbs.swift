@@ -17,12 +17,35 @@ enum BreadcrumbMouseButton: Sendable, Equatable {
   }
 }
 
+struct KeyboardHIDEvent: Codable, Sendable, Equatable {
+  let virtualKeyCode: UInt16
+  let modifierFlags: UInt64
+  let text: String
+}
+
+struct PointerHIDEvent: Codable, Sendable, Equatable {
+  let buttonNumber: Int
+  let modifierFlags: UInt64
+  let clickCount: Int
+  let pressure: Double
+}
+
 enum BreadcrumbInteraction: Sendable, Equatable {
   case hover(offset: CGPoint)
-  case click(button: BreadcrumbMouseButton, offset: CGPoint)
+  case click(button: BreadcrumbMouseButton, offset: CGPoint, hid: PointerHIDEvent? = nil)
   case scroll(offset: CGPoint, deltaX: CGFloat, deltaY: CGFloat)
-  case type(String)
-  case key(String)
+  case type(String, events: [KeyboardHIDEvent] = [])
+  case key(String, event: KeyboardHIDEvent? = nil)
+}
+
+struct BreadcrumbScreenshot: Sendable, Equatable {
+  let id: UUID
+  let jpegData: Data
+  let screenFrameQuartz: CGRect
+
+  init(id: UUID = UUID(), jpegData: Data, screenFrameQuartz: CGRect) {
+    (self.id, self.jpegData, self.screenFrameQuartz) = (id, jpegData, screenFrameQuartz)
+  }
 }
 
 struct SuperSelectorBreadcrumbLink: Sendable, Equatable {
@@ -32,6 +55,7 @@ struct SuperSelectorBreadcrumbLink: Sendable, Equatable {
   let interaction: BreadcrumbInteraction
   let elementFrameQuartz: CGRect?
   let pointerQuartz: CGPoint
+  let screenshot: BreadcrumbScreenshot?
   let previousIndex: Int?
   let occurredAt: Date
 
@@ -58,6 +82,7 @@ struct BreadcrumbTrail: Sendable {
     let targetIdentity: String
     let cursorQuartz: CGPoint
     let elementFrameQuartz: CGRect?
+    let screenshot: BreadcrumbScreenshot?
     let observedSince: Date
   }
 
@@ -65,6 +90,25 @@ struct BreadcrumbTrail: Sendable {
   private var tailIndex: Int?
   private var liveTarget: LiveTarget?
   private var liveTargetWasCommitted = false
+
+  var currentScreenshot: BreadcrumbScreenshot? { liveTarget?.screenshot }
+
+  func screenshot(for observation: SuperSelectorObservation) -> BreadcrumbScreenshot? {
+    guard liveTarget?.targetIdentity == BreadcrumbRenderer.targetIdentity(for: observation) else {
+      return nil
+    }
+    return liveTarget?.screenshot
+  }
+
+  func needsScreenshot(
+    for observation: SuperSelectorObservation,
+    at date: Date = Date()
+  ) -> Bool {
+    guard let liveTarget,
+      liveTarget.targetIdentity == BreadcrumbRenderer.targetIdentity(for: observation)
+    else { return false }
+    return liveTarget.screenshot == nil && date.timeIntervalSince(liveTarget.observedSince) >= 0.18
+  }
 
   var currentLiveLink: LiveSuperSelectorBreadcrumbLink? {
     liveTarget.map {
@@ -80,6 +124,7 @@ struct BreadcrumbTrail: Sendable {
 
   mutating func updateLive(
     observation: SuperSelectorObservation,
+    screenshot: BreadcrumbScreenshot? = nil,
     at date: Date = Date()
   ) {
     let target = LiveTarget(
@@ -88,6 +133,7 @@ struct BreadcrumbTrail: Sendable {
       targetIdentity: BreadcrumbRenderer.targetIdentity(for: observation),
       cursorQuartz: observation.scene.cursorQuartz,
       elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
+      screenshot: screenshot,
       observedSince: date
     )
     guard let previous = liveTarget else {
@@ -102,6 +148,7 @@ struct BreadcrumbTrail: Sendable {
         targetIdentity: target.targetIdentity,
         cursorQuartz: target.cursorQuartz,
         elementFrameQuartz: target.elementFrameQuartz,
+        screenshot: screenshot ?? previous.screenshot,
         observedSince: previous.observedSince
       )
       return
@@ -127,6 +174,7 @@ struct BreadcrumbTrail: Sendable {
           )),
         elementFrameQuartz: previous.elementFrameQuartz,
         pointerQuartz: previous.cursorQuartz,
+        screenshot: previous.screenshot,
         at: date
       )
     }
@@ -138,9 +186,11 @@ struct BreadcrumbTrail: Sendable {
     observation: SuperSelectorObservation,
     button: BreadcrumbMouseButton,
     at quartzPoint: CGPoint,
+    hid: PointerHIDEvent? = nil,
+    screenshot: BreadcrumbScreenshot? = nil,
     occurredAt: Date = Date()
   ) {
-    updateLive(observation: observation, at: occurredAt)
+    updateLive(observation: observation, screenshot: screenshot, at: occurredAt)
     let frame = observation.scene.accessibilityElement?.frameInQuartzCoordinates
     append(
       selector: observation.compactSelector,
@@ -148,10 +198,12 @@ struct BreadcrumbTrail: Sendable {
       targetIdentity: BreadcrumbRenderer.targetIdentity(for: observation),
       interaction: .click(
         button: button,
-        offset: mouseOffset(at: quartzPoint, currentFrame: frame)
+        offset: mouseOffset(at: quartzPoint, currentFrame: frame),
+        hid: hid
       ),
       elementFrameQuartz: frame,
       pointerQuartz: quartzPoint,
+      screenshot: liveTarget?.screenshot ?? screenshot,
       at: occurredAt
     )
     liveTargetWasCommitted = true
@@ -162,9 +214,10 @@ struct BreadcrumbTrail: Sendable {
     at quartzPoint: CGPoint,
     deltaX: CGFloat,
     deltaY: CGFloat,
+    screenshot: BreadcrumbScreenshot? = nil,
     occurredAt: Date = Date()
   ) {
-    updateLive(observation: observation, at: occurredAt)
+    updateLive(observation: observation, screenshot: screenshot, at: occurredAt)
     let targetIdentity = BreadcrumbRenderer.targetIdentity(for: observation)
     let frame = observation.scene.accessibilityElement?.frameInQuartzCoordinates
     if let tailIndex,
@@ -184,6 +237,7 @@ struct BreadcrumbTrail: Sendable {
         ),
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
+        screenshot: liveTarget?.screenshot ?? screenshot ?? previous.screenshot,
         previousIndex: previous.previousIndex,
         occurredAt: occurredAt
       )
@@ -199,6 +253,7 @@ struct BreadcrumbTrail: Sendable {
         ),
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
+        screenshot: liveTarget?.screenshot ?? screenshot,
         at: occurredAt
       )
     }
@@ -207,25 +262,28 @@ struct BreadcrumbTrail: Sendable {
 
   mutating func recordText(
     _ text: String,
+    event: KeyboardHIDEvent? = nil,
     observation: SuperSelectorObservation,
+    screenshot: BreadcrumbScreenshot? = nil,
     occurredAt: Date = Date()
   ) {
     guard !text.isEmpty else { return }
-    updateLive(observation: observation, at: occurredAt)
+    updateLive(observation: observation, screenshot: screenshot, at: occurredAt)
     let targetIdentity = BreadcrumbRenderer.targetIdentity(for: observation)
     if let tailIndex,
       links[tailIndex].targetIdentity == targetIdentity,
       occurredAt.timeIntervalSince(links[tailIndex].occurredAt) <= 0.6,
-      case .type(let previousText) = links[tailIndex].interaction
+      case .type(let previousText, let previousEvents) = links[tailIndex].interaction
     {
       let previous = links[tailIndex]
       links[tailIndex] = SuperSelectorBreadcrumbLink(
         selector: observation.compactSelector,
         targetPath: BreadcrumbRenderer.targetPath(for: observation),
         targetIdentity: targetIdentity,
-        interaction: .type(previousText + text),
+        interaction: .type(previousText + text, events: previousEvents + [event].compactMap { $0 }),
         elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
         pointerQuartz: observation.scene.cursorQuartz,
+        screenshot: liveTarget?.screenshot ?? screenshot ?? previous.screenshot,
         previousIndex: previous.previousIndex,
         occurredAt: occurredAt
       )
@@ -234,9 +292,10 @@ struct BreadcrumbTrail: Sendable {
         selector: observation.compactSelector,
         targetPath: BreadcrumbRenderer.targetPath(for: observation),
         targetIdentity: targetIdentity,
-        interaction: .type(text),
+        interaction: .type(text, events: [event].compactMap { $0 }),
         elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
         pointerQuartz: observation.scene.cursorQuartz,
+        screenshot: liveTarget?.screenshot ?? screenshot,
         at: occurredAt
       )
     }
@@ -245,17 +304,20 @@ struct BreadcrumbTrail: Sendable {
 
   mutating func recordKey(
     _ key: String,
+    event: KeyboardHIDEvent? = nil,
     observation: SuperSelectorObservation,
+    screenshot: BreadcrumbScreenshot? = nil,
     occurredAt: Date = Date()
   ) {
-    updateLive(observation: observation, at: occurredAt)
+    updateLive(observation: observation, screenshot: screenshot, at: occurredAt)
     append(
       selector: observation.compactSelector,
       targetPath: BreadcrumbRenderer.targetPath(for: observation),
       targetIdentity: BreadcrumbRenderer.targetIdentity(for: observation),
-      interaction: .key(key),
+      interaction: .key(key, event: event),
       elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
       pointerQuartz: observation.scene.cursorQuartz,
+      screenshot: liveTarget?.screenshot ?? screenshot,
       at: occurredAt
     )
     liveTargetWasCommitted = true
@@ -268,6 +330,7 @@ struct BreadcrumbTrail: Sendable {
     interaction: BreadcrumbInteraction,
     elementFrameQuartz: CGRect?,
     pointerQuartz: CGPoint,
+    screenshot: BreadcrumbScreenshot?,
     at date: Date
   ) {
     let index = links.count
@@ -279,6 +342,7 @@ struct BreadcrumbTrail: Sendable {
         interaction: interaction,
         elementFrameQuartz: elementFrameQuartz,
         pointerQuartz: pointerQuartz,
+        screenshot: screenshot,
         previousIndex: tailIndex,
         occurredAt: date
       ))
@@ -303,7 +367,12 @@ struct BreadcrumbTrail: Sendable {
     liveTargetWasCommitted = false
   }
 
-  func rendered(current observation: SuperSelectorObservation) -> String {
+  mutating func suspendLiveTarget() {
+    liveTarget = nil
+    liveTargetWasCommitted = false
+  }
+
+  func rendered(current observation: SuperSelectorObservation, maximumLinks: Int? = nil) -> String {
     var orderedLinks: [SuperSelectorBreadcrumbLink] = []
     var index = tailIndex
     while let currentIndex = index {
@@ -312,6 +381,9 @@ struct BreadcrumbTrail: Sendable {
       index = link.previousIndex
     }
     orderedLinks.reverse()
+    if let maximumLinks, orderedLinks.count > maximumLinks {
+      orderedLinks = Array(orderedLinks.suffix(maximumLinks))
+    }
 
     var renderedLinks = orderedLinks.map { link in
       link.subBreadcrumbs.joined(separator: ", ")
@@ -354,7 +426,7 @@ enum BreadcrumbRenderer {
     switch interaction {
     case .hover(let offset):
       return mousePath(action: "Hover", offset: offset)
-    case .click(let button, let offset):
+    case .click(let button, let offset, _):
       return mousePath(action: button.displayName, offset: offset)
     case .scroll(let offset, let deltaX, let deltaY):
       return String(
@@ -364,9 +436,9 @@ enum BreadcrumbRenderer {
         deltaX,
         deltaY
       )
-    case .type(let text):
+    case .type(let text, _):
       return "[Keyboard: Type > \(quoted(text))]"
-    case .key(let key):
+    case .key(let key, _):
       return "[Keyboard: Key > \(key)]"
     }
   }
@@ -405,8 +477,10 @@ enum BreadcrumbRenderer {
     append(
       node: AXBreadcrumbNode(
         role: element.role ?? "AXUnknown",
+        subrole: element.subrole,
         title: element.title,
         label: element.label,
+        help: element.help,
         value: element.value,
         identifier: element.identifier
       ),

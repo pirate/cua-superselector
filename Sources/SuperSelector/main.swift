@@ -13,13 +13,15 @@ private final class StatusItemHoverObserver: NSResponder {
   }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var overlay: OverlayCoordinator?
+  private let workflowModel = WorkflowIDEModel()
+  private var ideWindowController: WorkflowIDEWindowController?
   private var statusItem: NSStatusItem?
   private var statusItemHoverObserver: StatusItemHoverObserver?
   private var isStatusItemHovered = false
   private var isStatusMenuOpen = false
-  private var recentSelectors = RecentSelectorHistory(maximumEntries: 15)
   private let recentTimeFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "HH:mm:ss"
@@ -27,22 +29,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.accessory)
+    NSApp.setActivationPolicy(.regular)
     installStatusItem()
     let coordinator = OverlayCoordinator()
-    coordinator.onSelectorCaptured = { [weak self] selector in
-      self?.recordRecentSelector(selector)
+    coordinator.onSelectorCaptured = { [weak self] selector, trail in
+      self?.recordWorkflow(selector: selector, trail: trail)
+    }
+    coordinator.onScreenshotCaptureVisibilityChanged = { [weak self] hidden in
+      self?.statusItem?.isVisible = !hidden
     }
     overlay = coordinator
+    installIDE(coordinator: coordinator)
     updateOverlaySuppression()
     coordinator.start()
+    DispatchQueue.main.async { [weak self] in
+      self?.ideWindowController?.present()
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
   }
 
+  func applicationShouldHandleReopen(
+    _ sender: NSApplication, hasVisibleWindows flag: Bool
+  ) -> Bool {
+    if !flag {
+      ideWindowController?.present()
+    }
+    return true
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
+    workflowModel.flushPersistence()
     overlay?.stop()
   }
 
@@ -76,26 +95,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let title = NSMenuItem(title: "SuperSelector is inspecting", action: nil, keyEquivalent: "")
     title.isEnabled = false
     menu.addItem(title)
+    let studioItem = NSMenuItem(
+      title: "Open SuperSelector Studio…",
+      action: #selector(openStudio),
+      keyEquivalent: "i"
+    )
+    studioItem.keyEquivalentModifierMask = [.command, .shift]
+    studioItem.target = self
+    studioItem.image = NSImage(
+      systemSymbolName: "macwindow.and.cursorarrow",
+      accessibilityDescription: "Open SuperSelector Studio"
+    )
+    menu.addItem(studioItem)
     menu.addItem(.separator())
 
     let recentHeader = NSMenuItem(title: "Recent Selectors", action: nil, keyEquivalent: "")
     recentHeader.isEnabled = false
     menu.addItem(recentHeader)
-    if recentSelectors.entries.isEmpty {
+    if workflowModel.log.workflows.isEmpty {
       let empty = NSMenuItem(title: "No clicks recorded", action: nil, keyEquivalent: "")
       empty.isEnabled = false
       empty.indentationLevel = 1
       menu.addItem(empty)
     } else {
-      for entry in recentSelectors.entries {
+      for workflow in workflowModel.log.workflows.prefix(15) {
         let item = NSMenuItem(
-          title: recentSelectorTitle(entry),
+          title: recentSelectorTitle(workflow),
           action: #selector(resolveRecentSelector(_:)),
           keyEquivalent: ""
         )
         item.target = self
-        item.representedObject = entry.selector
-        item.toolTip = entry.selector
+        item.representedObject = workflow.finalSelector
+        item.toolTip = workflow.renderedBreadcrumbs()
         item.indentationLevel = 1
         item.image = NSImage(
           systemSymbolName: "cursorarrow.click", accessibilityDescription: "Recorded selector")
@@ -130,18 +161,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     overlay?.setSuppressed(isStatusItemHovered || isStatusMenuOpen)
   }
 
-  private func recordRecentSelector(_ selector: String) {
-    recentSelectors.record(selector)
+  private func recordWorkflow(selector: String, trail: BreadcrumbTrail) {
+    workflowModel.record(selector: selector, trail: trail)
     rebuildStatusMenu()
   }
 
-  private func recentSelectorTitle(_ entry: RecentSelectorEntry) -> String {
-    let hints = (try? SuperSelectorDecoder.decode(entry.selector)) ?? []
+  private func recentSelectorTitle(_ workflow: SuperSelectorWorkflow) -> String {
+    let hints = (try? SuperSelectorDecoder.decode(workflow.finalSelector)) ?? []
     func value(_ kind: String) -> String? {
       hints.first { $0.kind == kind }?.value
     }
 
-    var parts = [recentTimeFormatter.string(from: entry.capturedAt)]
+    var parts = [recentTimeFormatter.string(from: workflow.createdAt)]
     if let application = value("application.name") ?? value("application.bundle-id") {
       parts.append(application)
     }
@@ -162,6 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func quit() {
     NSApp.terminate(nil)
+  }
+
+  @objc private func openStudio() {
+    ideWindowController?.present()
   }
 
   @objc private func resolveSelector() {
@@ -205,9 +240,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       failure.runModal()
     }
   }
+
+  private func installIDE(coordinator: OverlayCoordinator) {
+    let controller = WorkflowIDEWindowController(model: workflowModel)
+    controller.onVisibilityChanged = { [weak self, weak coordinator] visible in
+      self?.workflowModel.setStudioVisible(visible)
+      coordinator?.setSuppressed(visible)
+      coordinator?.setRecordingEnabled(!visible)
+      coordinator?.setRecordingControlsVisible(!visible)
+    }
+    ideWindowController = controller
+    workflowModel.onLogChanged = { [weak self] in self?.rebuildStatusMenu() }
+    workflowModel.prepareVisualDebugging = { [weak self, weak coordinator] in
+      self?.ideWindowController?.dismissForVisualDebugging()
+      coordinator?.setSuppressed(false)
+      coordinator?.setRecordingEnabled(false)
+      coordinator?.setRecordingControlsVisible(false)
+      coordinator?.resetBreadcrumbTrail()
+    }
+    workflowModel.finishVisualDebugging = { [weak coordinator] in
+      coordinator?.setRecordingEnabled(true)
+    }
+    workflowModel.prepareReplayVisualization = { [weak self, weak coordinator] in
+      self?.ideWindowController?.dismissForVisualDebugging()
+      coordinator?.setSuppressed(false)
+      coordinator?.setRecordingEnabled(false)
+      coordinator?.setRecordingControlsVisible(false)
+      coordinator?.resetBreadcrumbTrail()
+      coordinator?.setReplayVisualizationActive(true)
+    }
+    workflowModel.finishReplayVisualization = { [weak coordinator] in
+      coordinator?.setReplayVisualizationActive(false)
+      coordinator?.setRecordingEnabled(true)
+    }
+    workflowModel.prepareNewTrail = { [weak self, weak coordinator] in
+      self?.ideWindowController?.dismissForVisualDebugging()
+      coordinator?.setReplayVisualizationActive(false)
+      coordinator?.setSuppressed(false)
+      coordinator?.setRecordingEnabled(false)
+      coordinator?.setRecordingControlsVisible(true)
+      coordinator?.resetBreadcrumbTrail()
+    }
+    workflowModel.finishNewTrail = { [weak coordinator] in
+      coordinator?.setRecordingEnabled(true)
+    }
+    coordinator.onRecordingEnded = { [weak self] in
+      self?.ideWindowController?.present()
+    }
+    workflowModel.showReplayTarget = { [weak coordinator] target in
+      coordinator?.showReplayTarget(target)
+    }
+    workflowModel.restoreIDE = { [weak self] in
+      self?.ideWindowController?.present()
+    }
+    workflowModel.showResolved = { [weak coordinator] selector, breadcrumbs, completion in
+      guard let coordinator else { return }
+      coordinator.showResolvedSelector(
+        selector,
+        breadcrumbs: breadcrumbs,
+        completion: completion
+      )
+    }
+  }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+MainActor.assumeIsolated {
+  let app = NSApplication.shared
+  let delegate = AppDelegate()
+  app.delegate = delegate
+  app.run()
+}

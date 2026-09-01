@@ -87,7 +87,7 @@ enum SuperSelectorDecoder {
   }
 }
 
-struct ResolvedSelectorTarget {
+struct ResolvedSelectorTarget: Sendable {
   let pointAppKit: CGPoint
   let elementFrameAppKit: CGRect?
 }
@@ -132,6 +132,7 @@ enum SelectorResolver {
         }.map(\.value)
       )
       let ancestorRolePath = accessibilityHints.first { $0.kind == "ancestor.role-path" }?.value
+      let hasStrongSemanticAncestor = hasStrongSemanticAncestorEvidence(accessibilityHints)
 
       if accessibilityHints.contains(where: {
         $0.kind == "state.focused" && $0.value == "true"
@@ -158,7 +159,8 @@ enum SelectorResolver {
           subrole: subrole,
           identifier: identifier,
           identityValues: identityValues,
-          ancestorRolePath: identifier == nil && identityValues.isEmpty ? ancestorRolePath : nil
+          ancestorRolePath: identifier == nil && identityValues.isEmpty
+            && !hasStrongSemanticAncestor ? ancestorRolePath : nil
         )
       return try resolveAccessibilityCandidate(
         storedHints: hints,
@@ -199,7 +201,7 @@ enum SelectorResolver {
       else { continue }
 
       var score = 0.0
-      for storedHint in storedAccessibilityHints {
+      for storedHint in storedAccessibilityHints where storedHint.kind != "ancestor.node" {
         guard
           let exact = candidateByKind[storedHint.kind]?.first(where: {
             $0.value == storedHint.value
@@ -211,6 +213,10 @@ enum SelectorResolver {
         }
         score += contribution
       }
+      score += semanticAncestorMatchScore(
+        storedHints: storedAccessibilityHints,
+        candidateHints: candidateHints
+      )
       matches.append(CandidateMatch(snapshot: candidate, score: score))
     }
 
@@ -264,6 +270,13 @@ enum SelectorResolver {
       return textualIdentityKinds.contains(where: matches)
     }
 
+    if hasStrongSemanticAncestorEvidence(storedByKind["ancestor.node", default: []]) {
+      return semanticAncestorMatchScore(
+        storedHints: storedByKind["ancestor.node", default: []],
+        candidateHints: candidateByKind["ancestor.node", default: []]
+      ) >= 8
+    }
+
     if storedByKind["ancestor.role-path"]?.isEmpty == false {
       return matches("ancestor.role-path")
     }
@@ -287,6 +300,85 @@ enum SelectorResolver {
     return MacAccessibilityHintProvider().hints(for: scene)
   }
 
+  private static func hasStrongSemanticAncestorEvidence(_ hints: [Hint]) -> Bool {
+    semanticAncestorNodes(hints)
+      .contains { hint in
+        ancestorIdentityFields(hint).contains { key, _ in ancestorFieldWeight(key) >= 8 }
+      }
+  }
+
+  private static func semanticAncestorMatchScore(
+    storedHints: [Hint], candidateHints: [Hint]
+  ) -> Double {
+    let storedNodes = semanticAncestorNodes(storedHints)
+    let candidateNodes = semanticAncestorNodes(candidateHints)
+    var unusedCandidates = Set(candidateNodes.indices)
+    var total = 0.0
+
+    for stored in storedNodes {
+      let storedFields = ancestorIdentityFields(stored)
+      guard !storedFields.isEmpty else { continue }
+      var best: (index: Int, score: Double)?
+      for index in unusedCandidates where candidateNodes[index].value == stored.value {
+        let candidateFields = ancestorIdentityFields(candidateNodes[index])
+        let score = storedFields.reduce(0.0) { partial, field in
+          guard let candidateValue = candidateFields[field.key] else { return partial }
+          return partial
+            + ancestorFieldMatchScore(
+              key: field.key, stored: field.value, candidate: candidateValue)
+        }
+        if score > (best?.score ?? 0) { best = (index, score) }
+      }
+      if let best {
+        unusedCandidates.remove(best.index)
+        total += best.score
+      }
+    }
+    return total
+  }
+
+  private static func semanticAncestorNodes(_ hints: [Hint]) -> [Hint] {
+    hints.filter {
+      $0.kind == "ancestor.node" && !["application", "window"].contains($0.value)
+    }
+  }
+
+  private static func ancestorIdentityFields(_ hint: Hint) -> [String: String] {
+    let directKeys: Set<String> = [
+      "identifier", "label", "title", "help", "subrole", "role-description",
+    ]
+    return hint.metadata.reduce(into: [:]) { result, field in
+      let key = field.key.lowercased()
+      guard directKeys.contains(key) || key.hasPrefix("semantic.") else { return }
+      let value = field.value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !value.isEmpty { result[key] = value }
+    }
+  }
+
+  private static func ancestorFieldMatchScore(
+    key: String, stored: String, candidate: String
+  ) -> Double {
+    if key.contains("class") {
+      let storedClasses = Set(stored.lowercased().split(whereSeparator: { $0.isWhitespace }))
+      let candidateClasses = Set(candidate.lowercased().split(whereSeparator: { $0.isWhitespace }))
+      return storedClasses.isDisjoint(with: candidateClasses) ? 0 : ancestorFieldWeight(key)
+    }
+    return stored == candidate ? ancestorFieldWeight(key) : 0
+  }
+
+  private static func ancestorFieldWeight(_ key: String) -> Double {
+    let lowered = key.lowercased()
+    if lowered == "identifier" || lowered.contains("domidentifier") { return 24 }
+    if lowered == "label" || lowered == "title" || lowered.contains("arialabel") { return 14 }
+    if lowered.contains("placeholder") { return 10 }
+    if lowered == "help" || lowered.contains("description") { return 8 }
+    if lowered == "subrole" { return 6 }
+    if lowered.contains("url") || lowered.contains("document") { return 6 }
+    if lowered.contains("class") { return 4 }
+    if lowered == "role-description" { return 2 }
+    return 5
+  }
+
   private static func hintWeight(_ hint: Hint) -> Double {
     switch hint.kind {
     case "native.identifier": return 20
@@ -303,6 +395,7 @@ enum SelectorResolver {
     case "application.name": return 4
     case "semantic.value": return 3
     case "ancestor.contains-role": return 2
+    case "ancestor.node": return 0
     case "capability.action": return 1
     case "state.enabled", "state.focused", "state.selected": return 0
     default: return 1
@@ -320,25 +413,10 @@ enum SelectorResolver {
     storedScreenHints: [Hint],
     screenFrames: [CGRect]
   ) throws -> ResolvedSelectorTarget {
-    let storedFrame = storedScreenHints.first { $0.kind == "element.frame.screen" }
-      .flatMap { parseRect($0.value) }
-    let storedPoint = storedScreenHints.first { $0.kind == "pointer.position.screen" }
-      .flatMap { parsePoint($0.value) }
-
-    let relativeX: CGFloat
-    let relativeY: CGFloat
-    if let storedFrame, let storedPoint, storedFrame.width > 0, storedFrame.height > 0 {
-      relativeX = min(1, max(0, (storedPoint.x - storedFrame.minX) / storedFrame.width))
-      relativeY = min(1, max(0, (storedPoint.y - storedFrame.minY) / storedFrame.height))
-    } else {
-      relativeX = 0.5
-      relativeY = 0.5
-    }
-
-    let pointQuartz = CGPoint(
-      x: candidateFrameQuartz.minX + relativeX * candidateFrameQuartz.width,
-      y: candidateFrameQuartz.minY + relativeY * candidateFrameQuartz.height
-    )
+    let pointQuartz =
+      SuperSelectorBoxModel(hints: storedScreenHints)?
+      .pointer(retargetedTo: candidateFrameQuartz)
+      ?? CGPoint(x: candidateFrameQuartz.midX, y: candidateFrameQuartz.midY)
     let pointAppKit = CoordinateSpaces.appKitPoint(fromQuartz: pointQuartz)
     let frameAppKit = CoordinateSpaces.appKitRect(fromQuartz: candidateFrameQuartz)
     guard screenFrames.contains(where: { $0.contains(pointAppKit) }) else {
@@ -354,39 +432,15 @@ enum SelectorResolver {
     screenHints: [Hint],
     screenFrames: [CGRect]
   ) throws -> ResolvedSelectorTarget {
-
-    let quartzFrame = screenHints.first { $0.kind == "element.frame.screen" }
-      .flatMap { parseRect($0.value) }
-    let quartzPoint = screenHints.first { $0.kind == "pointer.position.screen" }
-      .flatMap { parsePoint($0.value) }
-
-    let frame = quartzFrame.map(CoordinateSpaces.appKitRect(fromQuartz:))
-    let point =
-      quartzPoint.map(CoordinateSpaces.appKitPoint(fromQuartz:))
-      ?? frame.map { CGPoint(x: $0.midX, y: $0.midY) }
-    guard let point else { throw SuperSelectorDecodingError.missingScreenLocation }
+    guard let boxModel = SuperSelectorBoxModel(hints: screenHints) else {
+      throw SuperSelectorDecodingError.missingScreenLocation
+    }
+    let frame = boxModel.targetQuartz.map(CoordinateSpaces.appKitRect(fromQuartz:))
+    let point = CoordinateSpaces.appKitPoint(fromQuartz: boxModel.pointerQuartz)
     guard screenFrames.contains(where: { $0.contains(point) }) else {
       throw SuperSelectorDecodingError.locationOffscreen
     }
     return ResolvedSelectorTarget(pointAppKit: point, elementFrameAppKit: frame)
   }
 
-  private static func parsePoint(_ value: String) -> CGPoint? {
-    let parts = value.split(separator: ",", omittingEmptySubsequences: false)
-    guard parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
-    return CGPoint(x: x, y: y)
-  }
-
-  private static func parseRect(_ value: String) -> CGRect? {
-    var values: [String: Double] = [:]
-    for component in value.split(separator: ",") {
-      let pair = component.split(separator: "=", maxSplits: 1)
-      guard pair.count == 2, let number = Double(pair[1]) else { return nil }
-      values[String(pair[0])] = number
-    }
-    guard let x = values["x"], let y = values["y"], let width = values["w"],
-      let height = values["h"]
-    else { return nil }
-    return CGRect(x: x, y: y, width: width, height: height)
-  }
 }

@@ -11,10 +11,12 @@ struct AbsoluteScreenHintProvider: HintProvider {
 
   func hints(for scene: SceneSnapshot) -> [Hint] {
     let display = scene.displayFrameAppKit
-    let localX = scene.cursorAppKit.x - display.minX
-    let localY = scene.cursorAppKit.y - display.minY
-    let normalizedX = display.width > 0 ? localX / display.width : 0
-    let normalizedY = display.height > 0 ? localY / display.height : 0
+    let boxModel = SuperSelectorBoxModel(
+      screenAppKit: display,
+      targetAppKit: scene.elementFrameAppKit,
+      pointerAppKit: scene.cursorAppKit
+    )
+    let normalizedPointer = boxModel.normalizedPointer
 
     var result = [
       Hint(
@@ -29,7 +31,7 @@ struct AbsoluteScreenHintProvider: HintProvider {
         provider: id,
         kind: "pointer.position.display.normalized",
         band: "geometry",
-        value: String(format: "%.4f,%.4f", normalizedX, 1 - normalizedY),
+        value: String(format: "%.4f,%.4f", normalizedPointer.x, normalizedPointer.y),
         valueType: .scalar,
         metadata: ["display": scene.displayIdentifier]
       ),
@@ -42,18 +44,18 @@ struct AbsoluteScreenHintProvider: HintProvider {
       ),
     ]
 
-    if let elementFrame = scene.elementFrameAppKit {
-      let centerX = (elementFrame.midX - display.minX) / max(display.width, 1)
-      let centerYFromTop = 1 - ((elementFrame.midY - display.minY) / max(display.height, 1))
-      let width = elementFrame.width / max(display.width, 1)
-      let height = elementFrame.height / max(display.height, 1)
+    if let elementFrame = boxModel.targetQuartz,
+      let normalizedElement = boxModel.normalizedTarget
+    {
+      let centerX = normalizedElement.midX
+      let centerYFromTop = normalizedElement.midY
 
       result.append(
         Hint(
           provider: id,
           kind: "element.frame.screen",
           band: "geometry",
-          value: rectString(CoordinateSpaces.appKitRectToQuartz(elementFrame)),
+          value: rectString(elementFrame),
           valueType: .scalar,
           metadata: ["space": "quartz-global", "origin": "top-left"],
           quality: 0.75
@@ -79,7 +81,7 @@ struct AbsoluteScreenHintProvider: HintProvider {
           provider: id,
           kind: "element.size.normalized",
           band: "geometry",
-          value: String(format: "%.3f,%.3f", width, height),
+          value: String(format: "%.3f,%.3f", normalizedElement.width, normalizedElement.height),
           valueType: .scalar,
           metadata: ["relativeTo": "display"],
           quality: 0.5
@@ -89,8 +91,8 @@ struct AbsoluteScreenHintProvider: HintProvider {
       // Without a semantic element, pointer locality is the available target hint.
       // Multiple grids retain useful fuzzy locality without hashing exact pixels.
       for bins in [8, 16, 32, 64] {
-        let bx = min(bins - 1, max(0, Int(normalizedX * CGFloat(bins))))
-        let by = min(bins - 1, max(0, Int((1 - normalizedY) * CGFloat(bins))))
+        let bx = min(bins - 1, max(0, Int(normalizedPointer.x * CGFloat(bins))))
+        let by = min(bins - 1, max(0, Int(normalizedPointer.y * CGFloat(bins))))
         result.append(
           Hint(
             provider: id,
@@ -143,7 +145,7 @@ struct WindowRelativeHintProvider: HintProvider {
         kind: "pointer.position.window",
         band: "geometry",
         value: pointString(
-          CoordinateSpaces.localPoint(fromGlobal: scene.cursorQuartz, in: windowFrame)),
+          SuperSelectorBoxModel.local(scene.cursorQuartz, in: windowFrame)),
         valueType: .scalar,
         metadata: ["relativeTo": "window", "origin": "top-left"]
       ),
@@ -156,7 +158,7 @@ struct WindowRelativeHintProvider: HintProvider {
           kind: "element.frame.window",
           band: "geometry",
           value: rectString(
-            CoordinateSpaces.localRect(fromGlobal: elementFrame, in: windowFrame)),
+            SuperSelectorBoxModel.local(elementFrame, in: windowFrame)),
           valueType: .scalar,
           metadata: ["relativeTo": "window", "origin": "top-left"]
         ))
@@ -294,6 +296,32 @@ struct MacAccessibilityHintProvider: HintProvider {
         )
       }
     }
+    for (depth, node) in element.ancestorBreadcrumbNodes.reversed().enumerated() {
+      var metadata = ["depth": String(depth)]
+      if let subrole = node.subrole { metadata["subrole"] = normalizedRole(subrole) }
+      if let roleDescription = node.roleDescription {
+        metadata["role-description"] = roleDescription
+      }
+      if let title = node.title { metadata["title"] = title }
+      if let label = node.label { metadata["label"] = label }
+      if let help = node.help { metadata["help"] = help }
+      if let identifier = node.identifier { metadata["identifier"] = identifier }
+      if let value = node.value { metadata["value"] = value }
+      for (key, value) in node.semanticAttributes {
+        metadata["semantic.\(key)"] = value
+      }
+      result.append(
+        Hint(
+          provider: id,
+          kind: "ancestor.node",
+          band: "structure",
+          value: normalizedRole(node.role),
+          metadata: metadata,
+          quality: 0.8,
+          privacy: metadata.count > 1 ? .sensitive : .publicData
+        )
+      )
+    }
     return result
   }
 
@@ -347,10 +375,4 @@ private func pointString(_ point: CGPoint) -> String {
 
 private func rectString(_ rect: CGRect) -> String {
   String(format: "x=%.1f,y=%.1f,w=%.1f,h=%.1f", rect.minX, rect.minY, rect.width, rect.height)
-}
-
-extension CoordinateSpaces {
-  static func appKitRectToQuartz(_ rect: CGRect) -> CGRect {
-    CGRect(x: rect.minX, y: primaryScreenTop - rect.maxY, width: rect.width, height: rect.height)
-  }
 }

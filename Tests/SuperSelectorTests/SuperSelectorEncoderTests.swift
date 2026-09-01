@@ -20,11 +20,11 @@ final class SuperSelectorEncoderTests: XCTestCase {
     let element = CGRect(x: -3100, y: 2400, width: 200, height: 80)
 
     XCTAssertEqual(
-      CoordinateSpaces.localPoint(fromGlobal: cursor, in: secondaryFrame),
+      SuperSelectorBoxModel.local(cursor, in: secondaryFrame),
       CGPoint(x: 953, y: 1171)
     )
     XCTAssertEqual(
-      CoordinateSpaces.localRect(fromGlobal: element, in: secondaryFrame),
+      SuperSelectorBoxModel.local(element, in: secondaryFrame),
       CGRect(x: 853, y: 1071, width: 200, height: 80)
     )
   }
@@ -243,6 +243,49 @@ final class SuperSelectorEncoderTests: XCTestCase {
     }
   }
 
+  func testSemanticAncestorIdentitySurvivesAnonymousNestingChanges() throws {
+    let hints = [
+      Hint(
+        provider: "screen.absolute", kind: "pointer.position.screen", band: "geometry",
+        value: "120.0,120.0", valueType: .scalar),
+      Hint(
+        provider: "mac.ax", kind: "application.bundle-id", band: "scope",
+        value: "com.example.app"),
+      Hint(provider: "mac.ax", kind: "semantic.role", band: "semantic", value: "button"),
+      Hint(
+        provider: "mac.ax", kind: "ancestor.role-path", band: "structure",
+        value: "group>group>group"),
+      Hint(
+        provider: "mac.ax", kind: "ancestor.node", band: "structure", value: "group",
+        metadata: ["depth": "2", "semantic.AXDOMIdentifier": "checkout-panel"]),
+    ]
+    var wrong = AXElementSnapshot()
+    wrong.bundleIdentifier = "com.example.app"
+    wrong.role = "AXButton"
+    wrong.frameInQuartzCoordinates = CGRect(x: 100, y: 100, width: 100, height: 40)
+    wrong.ancestorBreadcrumbNodes = [
+      AXBreadcrumbNode(
+        role: "AXGroup", semanticAttributes: ["AXDOMIdentifier": "settings-panel"])
+    ]
+    var matching = wrong
+    matching.frameInQuartzCoordinates = CGRect(x: 500, y: 400, width: 120, height: 50)
+    matching.ancestorBreadcrumbNodes = [
+      AXBreadcrumbNode(
+        role: "AXGroup", semanticAttributes: ["AXDOMIdentifier": "checkout-panel"])
+    ]
+
+    let result = try SelectorResolver.resolve(
+      SuperSelectorEncoder.encode(hints),
+      screenFrames: [CGRect(x: -2_000, y: -2_000, width: 5_000, height: 5_000)],
+      accessibilityCandidates: [wrong, matching]
+    )
+
+    XCTAssertEqual(
+      result.elementFrameAppKit,
+      CoordinateSpaces.appKitRect(fromQuartz: matching.frameInQuartzCoordinates!)
+    )
+  }
+
   func testMacProviderEmitsStableApplicationScopeWithoutProcessID() {
     var element = AXElementSnapshot()
     element.applicationName = "Example"
@@ -253,6 +296,15 @@ final class SuperSelectorEncoderTests: XCTestCase {
     element.windowTitle = "Settings"
     element.role = "AXButton"
     element.title = "Save"
+    element.ancestorBreadcrumbNodes = [
+      AXBreadcrumbNode(
+        role: "AXGroup", subrole: "AXTabGroup", roleDescription: "tab group", title: "Advanced",
+        semanticAttributes: [
+          "AXDOMIdentifier": "advanced-pane", "AXDOMClassList": "pane active",
+        ]),
+      AXBreadcrumbNode(role: "AXGroup", label: "Preferences", identifier: "prefs-root"),
+      AXBreadcrumbNode(role: "AXWindow", title: "Settings"),
+    ]
 
     let scene = SceneSnapshot(
       sampledAt: Date(),
@@ -271,6 +323,15 @@ final class SuperSelectorEncoderTests: XCTestCase {
       "com.example.app"
     )
     XCTAssertEqual(hints.first { $0.kind == "window.identifier" }?.value, "settings")
+    let tree = hints.filter { $0.kind == "ancestor.node" }
+    XCTAssertEqual(tree.map(\.value), ["window", "group", "group"])
+    XCTAssertEqual(tree.map { $0.metadata["depth"] }, ["0", "1", "2"])
+    XCTAssertEqual(tree[1].metadata["label"], "Preferences")
+    XCTAssertEqual(tree[1].metadata["identifier"], "prefs-root")
+    XCTAssertEqual(tree[2].metadata["subrole"], "tabgroup")
+    XCTAssertEqual(tree[2].metadata["role-description"], "tab group")
+    XCTAssertEqual(tree[2].metadata["semantic.AXDOMIdentifier"], "advanced-pane")
+    XCTAssertEqual(tree[2].metadata["semantic.AXDOMClassList"], "pane active")
   }
 
   func testBreadcrumbRendererUsesNamedAXAncestry() {
@@ -464,6 +525,25 @@ final class SuperSelectorEncoderTests: XCTestCase {
 
     XCTAssertTrue(trail.links.isEmpty)
     XCTAssertEqual(trail.currentLiveLink?.targetPath, "[Window: Browser > Group]")
+  }
+
+  func testPausedTrailDoesNotBridgeHoverMovementAcrossPause() {
+    var firstElement = AXElementSnapshot()
+    firstElement.role = "AXButton"
+    firstElement.title = "First"
+    firstElement.frameInQuartzCoordinates = CGRect(x: 80, y: 80, width: 80, height: 40)
+    var secondElement = AXElementSnapshot()
+    secondElement.role = "AXButton"
+    secondElement.title = "Second"
+    secondElement.frameInQuartzCoordinates = CGRect(x: 480, y: 480, width: 80, height: 40)
+    var trail = BreadcrumbTrail()
+    let first = observation(with: firstElement, cursorQuartz: CGPoint(x: 100, y: 100))
+    let second = observation(with: secondElement, cursorQuartz: CGPoint(x: 500, y: 500))
+    trail.updateLive(observation: first, at: Date(timeIntervalSince1970: 1))
+    trail.suspendLiveTarget()
+    trail.updateLive(observation: second, at: Date(timeIntervalSince1970: 10))
+
+    XCTAssertTrue(trail.links.isEmpty)
   }
 
   func testDoubleEscapeResetRequiresTwoConsecutiveQuickPresses() {

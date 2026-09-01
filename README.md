@@ -148,6 +148,25 @@ The overlay uses provider icons and category colors so changes are easy to follo
 
 The overlay is hidden while the pointer is over SuperSelector's own status item and while its menu is open, so the inspector does not cover or record its own controls.
 
+### SuperSelector Studio
+
+The app now includes a compact workflow IDE for debugging selectors as computer-use scripts-as-data. Open **SuperSelector Studio…** from the menu bar (or press Command-Shift-I) to:
+
+- browse recorded trails and their action-by-action timelines;
+- inspect a clean screenshot captured for every breadcrumb, with SuperSelector's panels/status item excluded and the saved element box and pointer crosshairs rendered afterward in both timeline and detail previews;
+- inspect the readable breadcrumbs, final selector, and editable JSON together;
+- select any step and **GOTO** it using the existing crosshairs, outline, and inspector;
+- replay the complete workflow or replay only through a selected point in time;
+- copy or import a workflow log as JSON, or import/export it as a file.
+
+Time travel is intentionally forward-only. Before replay, the runner normalizes the desktop by hiding regular applications and activating Finder, then replays from the first recorded action through the chosen step. Each resolved breadcrumb is previewed with the pink outline and crosshairs before its action, without obscuring the target with the inspector panel; the Studio speed control adjusts that preview delay. The runner activates each target application from stable bundle or path hints and resolves the target again from accessibility hints; it does not undo actions or click stale coordinates. If the resolver cannot identify one safe target, replay stops and the Studio reports the failure instead of guessing.
+
+The Studio uses native split navigation, toolbars, inspectors, and tables. On macOS 26 its replay controls adopt Liquid Glass, with a material fallback on macOS 14–15.
+
+All geometry consumers share `SuperSelectorBoxModel`: hint generation, the live box/rulers, the inspector's box-model diagram, screenshot annotations, and replay's moved-element point reconstruction. This keeps top-left Quartz coordinates, display normalization, and relative click offsets from drifting into separate implementations.
+
+Workflow JSON schema 2 stores screenshot pixels once in a top-level asset table and lets each breadcrumb reference its image plus exact box-model geometry. Repeated workflow prefixes therefore remain self-contained for clipboard/file export without embedding the same JPEG once per step per saved selector. The AX provider also emits ordered `ancestor.node` hints (role, depth, label/title, native identifier, and value when present), which the inspector renders as an indented identity tree rather than a flat role list.
+
 The resolver decodes the lossless format and first scopes directly to the currently running app by stable application identity, then to an exact AX window when one was recorded. A focused-element hint can be checked directly. Otherwise it traverses only the smallest available AX subtree, applying cheap role, native identifier, text, and ancestor predicates before hydrating full candidates. macOS does not expose a general system-wide query-by-label API, so traversal remains the last step when direct scope is insufficient.
 
 It requires exact application and role agreement plus a strong identifier, name/value, or structural match; then it uses the remaining AX hints as corroboration and declines tied results. Coordinates never select or rank an AX candidate. Only after one position-independent candidate wins are the current bounds used to preserve the original click's relative offset within that element. This allows an element to resolve after scrolling or window movement without replaying stale absolute coordinates. A selector without usable AX identity falls back to its `screen.absolute` hints. The resolver only visualizes the result and never clicks.
@@ -221,4 +240,4 @@ Ad-hoc builds usually require a new Accessibility grant after rebuilding. Use th
 
 ## Status
 
-The repository currently implements live selector generation and inspection on macOS, recent-selector capture, and an initial read-only AX resolver. Input dispatch is still manual. OCR, visual, Windows, browser, and app-specific providers can be added through the existing provider interface.
+The repository currently implements live selector generation and inspection on macOS, persistent workflow recording, JSON editing/import/export, safe AX-first GOTO resolution, and forward replay through any chosen workflow step. OCR, visual, Windows, browser, and app-specific providers can be added through the existing provider interface.

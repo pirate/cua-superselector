@@ -77,10 +77,14 @@ struct AXElementSnapshot: Sendable {
 
 struct AXBreadcrumbNode: Sendable, Equatable {
   var role: String
+  var subrole: String?
+  var roleDescription: String?
   var title: String?
   var label: String?
+  var help: String?
   var value: String?
   var identifier: String?
+  var semanticAttributes: [String: String] = [:]
 }
 
 struct SceneSnapshot: Sendable {
@@ -132,6 +136,10 @@ enum CoordinateSpaces {
     CGPoint(x: point.x, y: primaryScreenTop - point.y)
   }
 
+  static func quartzPoint(fromAppKit point: CGPoint) -> CGPoint {
+    CGPoint(x: point.x, y: primaryScreenTop - point.y)
+  }
+
   static func appKitRect(fromQuartz rect: CGRect) -> CGRect {
     CGRect(
       x: rect.minX,
@@ -141,13 +149,15 @@ enum CoordinateSpaces {
     )
   }
 
-  static func localPoint(fromGlobal point: CGPoint, in windowFrame: CGRect) -> CGPoint {
-    CGPoint(x: point.x - windowFrame.minX, y: point.y - windowFrame.minY)
+  static func quartzRect(fromAppKit rect: CGRect) -> CGRect {
+    CGRect(
+      x: rect.minX,
+      y: primaryScreenTop - rect.maxY,
+      width: rect.width,
+      height: rect.height
+    )
   }
 
-  static func localRect(fromGlobal rect: CGRect, in windowFrame: CGRect) -> CGRect {
-    rect.offsetBy(dx: -windowFrame.minX, dy: -windowFrame.minY)
-  }
 }
 
 enum SuperSelectorEncoder {
