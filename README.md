@@ -4,7 +4,11 @@
 
 SuperSelector Studio gives computer-use agents durable targets and cacheable action sequences for arbitrary macOS interfaces.
 
-For the system-level context behind these concepts, read [Inside Codex Computer Use and Sky: an architecture deep dive](https://docs.monadical.com/s/codex-sky-deep-dive).
+## Architecture notes
+
+- [Sky / Codex Computer Use on macOS](https://docs.monadical.com/s/codex-sky-deep-dive) explains the native architecture, capture/action lifecycle, accessibility model, and design lineage.
+- [Stagehand v4 and Sky / Codex Computer Use](https://docs.monadical.com/s/stagehand-v4-sky-control-plane) compares their agent loops, element resolution, event systems, replay, tracing, and recovery.
+- [SuperSelectors: Durable UI Addressing Between Observation and Replay](https://docs.monadical.com/s/superselectors-durable-ui-addressing) synthesizes those lessons into the durable-target design and maps its remaining hard problems.
 
 A Computer Use element index is an excellent address inside one captured UI tree. It is not an identity that can safely survive another capture, a window rearrangement, an application restart, or a different machine. A SuperSelector preserves provider-attributed evidence about a target so the corresponding element can be found again.
 
