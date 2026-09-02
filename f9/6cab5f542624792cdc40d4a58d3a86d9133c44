@@ -1,0 +1,21 @@
+SuperSelector.app/Contents/Info.plist
+  s_250c203f034c9b::t_94c0b473c50b8c 18,20
+support/Info.plist
+  s_250c203f034c9b::t_d62a698f9fd150 18,20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f96cab5f542624792cdc40d4a58d3a86d9133c44",
+  "prompts": {},
+  "sessions": {
+    "s_250c203f034c9b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a061e0-762c-7843-b14b-d6397ffd4364",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
