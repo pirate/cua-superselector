@@ -1,31 +1,97 @@
-# Cache-able "SuperSelectors" for Computer Use Agents
+# SuperSelector Studio for Codex Computer Use
 
 ![SuperSelector recording and replay demo](dist/SuperSelector-breadcrumbs-demo.gif)
 
-`SuperSelectors` are my attempt at giving CUA systems one cachable "visual element selector" string that can carry hints from any source the driver has access to.
+SuperSelector Studio gives computer-use agents durable targets and cacheable action sequences for arbitrary macOS interfaces.
 
-Think of it as a fuzzy `xpath` or CSS selector, but for arbitrary things on your screen, not only DOM elements.
+For the system-level context behind these concepts, read [Inside Codex Computer Use and Sky: an architecture deep dive](https://docs.monadical.com/s/codex-sky-deep-dive).
 
-> **⬇️ Download the latest <a href="https://github.com/pirate/cua-superselector/releases"><code>SuperSelector.app</code><a/> here.**
+A Computer Use element index is an excellent address inside one captured UI tree. It is not an identity that can safely survive another capture, a window rearrangement, an application restart, or a different machine. A SuperSelector preserves provider-attributed evidence about a target so the corresponding element can be found again.
+
+The result is a two-speed execution model:
+
+1. Codex Computer Use observes and reasons when a workflow is unfamiliar or the UI has changed.
+2. SuperSelector Studio records durable targets and actions while keeping their screenshots and agent-facing trees together.
+3. A recording can run as a deterministic fast path without another model decision between every action.
+4. Target ambiguity stops cached execution; the integration contract returns that cache miss to the ordinary Computer Use loop.
+
+> **Download the latest [`SuperSelector.app`](https://github.com/pirate/cua-superselector/releases).**
 
 <img width="45%" src="https://github.com/user-attachments/assets/1f07f220-159b-468d-9605-d7f36fdd41d8" /><img width="50%" src="https://github.com/user-attachments/assets/cc90ca6a-05cf-48b5-be3b-014023e0f277" />
 
-`SuperSelector.app` is a small macOS app for inspecting the SuperSelector generated for whatever is under your cursor.
+## The data model
 
+SuperSelector uses separate types for evidence with different lifetimes. Snapshot-local addresses never leak into durable identity.
 
-During a normal computer-use loop, a driver usually has several ways to reference a UI element:
+| Concept | Swift type | Lifetime | Purpose |
+| --- | --- | --- | --- |
+| Skyshot | `ComputerUseSkyshot` | One observation | Combines capture context, provider evidence, durable target, and agent tree |
+| Capture context | `ComputerUseCaptureContext` | One observation | Timestamp, pointer, display, trust state, and target AX snapshot |
+| AX node | `AccessibilityNode` | One tree revision | Agent-visible role, name, state, actions, frame, and element index |
+| Agent tree | `UIElementRenderTree` | One tree revision | Indexed hierarchy rendered in `AppState.text`-compatible form |
+| Durable evidence | `DurableTargetHint` | Shareable | Provider-attributed semantic, structural, content, state, and geometry evidence |
+| Provider state | `CaptureProviderReport` | One observation | Whether an evidence source is available, degraded, or unavailable |
+| Workflow library | `ComputerUseWorkflowLibrary` | Persistent | Versioned collection of recordings and screenshot assets |
+| Workflow recording | `ComputerUseWorkflowRecording` | Persistent/shareable | Ordered steps, final target, provenance, and Computer Use contract |
+| Workflow step | `ComputerUseWorkflowStep` | Persistent/shareable | Target, action, screenshot geometry, and captured agent tree |
+| Recorded action | `ComputerUseRecordedAction` | Persistent/shareable | Click, scroll, text, key, or hover input data |
+| Replay plan | `ComputerUseReplayPlan` | One execution | Full reset replay or a cached action subsequence |
 
-- its x,y bounding box on the screen
-- its role, label, value, and actions in the OS accessibility tree
-- text and edge bounds from OCR
-- visual features (computer vision)
-- viewport and document-relative CSS box coordinates (when in a browser)
-- CSS, XPath, DOM attributes, and the browser accessibility tree
-- framework- or app-specific identifiers from Electron, Qt, or other UI frameworks
+```mermaid
+flowchart LR
+    CU["Codex Computer Use"] -->|observe and choose| S["ComputerUseSkyshot"]
+    S --> T["UIElementRenderTree"]
+    S --> H["DurableTargetHint set"]
+    T --> I["revision-local element index"]
+    H --> D["ss3/e1 durable target"]
+    D --> W["ComputerUseWorkflowRecording"]
+    W --> P["ComputerUseReplayPlan"]
+    P --> R["fresh resolve → verify → act"]
+    R -->|verified| R
+    R -->|cache miss| CU
+```
 
-A **SuperSelector** collects all of these hints into one provider-attributed description of the element as it appeared in a particular screen, view, or scene.
+### Skyshots and agent trees
 
-For example, one element might produce:
+A `ComputerUseSkyshot` represents one observation of the desktop. It contains:
+
+- the `ComputerUseCaptureContext`;
+- one `CaptureProviderReport` per evidence source;
+- the complete set of `DurableTargetHint` values;
+- the encoded `ss3/e1` target;
+- a bounded `UIElementRenderTree`; and
+- the target node highlighted within that tree revision.
+
+The render tree assigns a temporary `elementIndex` to each `AccessibilityNode`. Studio renders it using the same basic grammar agents receive in `AppState.text`: an application/window header, indexed and indented roles, names and values, disabled or selected state, secondary actions, and the focused-element summary.
+
+```text
+Window: "Preferences", App: Example.
+0 group Settings
+	1 text field Search
+	2 group General
+		3 checkbox Launch at Login (selected)
+		4 button Save
+
+The focused UI element is 1 text field Search
+```
+
+The index `4` is meaningful only for that exact tree revision. A recording stores the target's SuperSelector, not `4`.
+
+Studio derives this compatible rendering from the application's macOS Accessibility hierarchy. An external Computer Use bridge can ingest the authoritative `AppState.text` and screenshot seen by Codex; private Sky service IPC is not part of the persistence format.
+
+### Durable target evidence
+
+A SuperSelector can combine evidence from every layer available to the driver:
+
+- screen and display geometry;
+- macOS Accessibility roles, labels, identifiers, values, actions, and ancestry;
+- OCR text and bounds;
+- visual landmarks or image features;
+- browser viewport and document geometry;
+- CSS, XPath, DOM, and browser accessibility properties; and
+- framework- or application-specific identifiers.
+
+One target may produce evidence like:
 
 ```text
 [screen.absolute] pointer.position.screen = 1432.0,811.0
@@ -40,235 +106,297 @@ For example, one element might produce:
 [ocr] text = Continue  {confidence=0.99}
 ```
 
-The available hints depend on the scene. A native macOS app may have screen and AX hints. A web page may add browser hints. A remote desktop or game may only expose coordinates, OCR, and visual features. Providers can be added independently, and every provider says where each hint came from.
+Every evidence field names its provider, category, kind, value type, metadata, quality, and privacy classification. Providers remain independent: a native app might expose only screen and AX evidence, while a browser can add DOM and viewport evidence and a remote desktop might supply only image, OCR, and coordinates.
 
----
-
-## How it works
-
-The hint engine runs alongside the CUA loop:
-
-1. The driver captures the current scene and target point.
-2. Each registered provider reports whether it is available, degraded, or unavailable.
-3. Available providers inspect the scene and emit namespaced hints.
-4. The engine sorts the hints into a stable order.
-5. Every hint is encoded losslessly into its own typed field in the final SuperSelector string.
-6. The expanded observation stays available for debugging and future resolution.
-
-```mermaid
-flowchart LR
-    S["Current scene + target point"] --> E["Hint engine"]
-    E --> P1["screen.absolute"]
-    E --> P2["mac.ax"]
-    E --> P3["ocr"]
-    E --> P4["browser.*"]
-    E --> P5["other providers..."]
-    P1 --> H["Ordered hint record"]
-    P2 --> H
-    P3 --> H
-    P4 --> H
-    P5 --> H
-    H --> C["Compact SuperSelector"]
-    H --> D["Expanded debug form"]
-```
-
-The current compact format looks like this:
+The compact representation is lossless:
 
 ```text
 ss3/e1~pscreen.absolute|bgeometry|kpointer.position.screen|tn|v1432.0%2C811.0|morigin=top-left;space=quartz-global|q1.000000|rpublic~...
 ```
 
-`ss3/e1` identifies the selector and encoding version. Every following field contains:
+`ss3/e1` identifies the selector and encoding version. Each following field independently preserves:
 
-- the exact provider, band, and hint kind;
-- an explicit scalar (`tn`) or text (`ts`) type;
-- the exact escaped value and sorted metadata;
-- the provider-reported quality and privacy classification.
+- provider and evidence band;
+- evidence kind;
+- scalar (`tn`) or text (`ts`) value type;
+- escaped value and sorted metadata;
+- provider-reported quality; and
+- privacy classification.
 
-The provider data remains available in the encoded string. Nearby scalar values retain their textual prefixes, and text stays available to whatever prefix or fuzzy comparison the resolver chooses. Every emitted hint contributes a field. Moving the pointer by a pixel changes the relevant coordinate characters.
+Runtime handles are excluded from durable identity. AX object references, process IDs, Windows HWNDs and UIA RuntimeIds, CDP node IDs, and Computer Use element indexes belong only to live resolution state.
 
-## Hint providers
+## Capture providers
 
-Providers are organized by the layer they can inspect. Several providers can describe the same element at once.
+Capture providers describe the same target from different layers.
 
-| Provider | Layer | Example hints | Status |
+| Provider | Layer | Example evidence | Availability |
 | --- | --- | --- | --- |
-| `screen.absolute` | Display server | pointer position, display ID, element frame, normalized geometry | Implemented |
-| `mac.ax` | macOS Accessibility | application, role, label, value, actions, state, ancestor roles | Implemented |
-| `windows.ax` | Windows UI Automation | control type, AutomationId, name, patterns, bounding rectangle | Planned |
-| `ocr` | Screenshot | text spans, language, confidence, bounding polygons | Planned |
-| `visual` | Screenshot | icons, region features, color, nearby visual landmarks | Planned |
-| `browser.viewport` | Browser view | viewport-relative coordinates and visible bounds | Planned |
-| `browser.document` | Browser document | document coordinates, scroll state, frame ancestry | Planned |
-| `browser.css` | DOM | tag, attributes, classes, selector candidates | Planned |
-| `browser.xpath` | DOM | structural paths and nearby document context | Planned |
-| `browser.ax` | Browser accessibility | roles, names, properties, and tree relationships | Planned |
-| `electron.*` | Application runtime | renderer, accessibility, and app-specific identifiers | Planned |
+| `screen.absolute` | Display server | Pointer, display ID, target frame, normalized geometry | Implemented |
+| `mac.ax` | macOS Accessibility | App/window identity, roles, labels, values, actions, state, ancestry | Implemented |
+| `windows.uia` | Windows UI Automation | Control type, AutomationId, name, patterns, bounding rectangle | Planned |
+| `ocr` | Screenshot | Text spans, language, confidence, bounding polygons | Planned |
+| `visual` | Screenshot | Icons, region features, edges, color, nearby landmarks | Planned |
+| `browser.viewport` | Browser view | Viewport coordinates and visible bounds | Planned |
+| `browser.document` | Browser document | Document coordinates, scrolling, frame ancestry | Planned |
+| `browser.css` | DOM | Tag, attributes, classes, selector candidates | Planned |
+| `browser.xpath` | DOM | Structural paths and nearby context | Planned |
+| `browser.ax` | Browser Accessibility | Roles, names, properties, and relationships | Planned |
+| `electron.*` | Application runtime | Renderer and application-specific identity | Planned |
 
-Provider IDs and hint kinds are strings, so the format has no fixed list of engines. A driver can register the providers supported by its environment and include application-specific providers when they expose useful information.
+Providers implement `ComputerUseCaptureProvider`:
 
-Provider status is also emitted as a hint. This makes the final observation say which sources were present at generation time. A later resolver can tell the difference between a missing value and a provider that was unavailable for the whole scene.
+```swift
+protocol ComputerUseCaptureProvider {
+  var id: String { get }
+  func report(for scene: ComputerUseCaptureContext) -> CaptureProviderReport
+  func hints(for scene: ComputerUseCaptureContext) -> [DurableTargetHint]
+}
+```
 
-<img width="970" height="643" alt="Screenshot 2026-08-13 at 1 31 56 PM" src="https://github.com/user-attachments/assets/6186b8e2-a02a-4016-be60-4a4f3eb7388f" />
+Provider IDs and evidence kinds are open strings. Unknown providers and fields survive encoding even when a particular resolver cannot interpret them.
 
+## SuperSelector Studio
 
-## Generation and fuzzy resolution
+`SuperSelector.app` is a live macOS recorder, inspector, and replay debugger for Computer Use workflows.
 
-SuperSelector generation records the full durable provider output. Every emitted hint gets an exact field in the compact string. Runtime handles such as process IDs are not selector hints: they identify one launch, cannot be reused by parallel or later runs, and add no cache value.
+As the pointer moves, the app:
 
-Fuzzy matching happens later, when a resolver compares the stored observation with candidates from a new scene. The resolver can compare compatible hint types, apply provider-specific rules, require agreement across several independent sources, and decline ambiguous matches.
+- captures a `ComputerUseSkyshot` for the target under the pointer;
+- outlines the target and draws display-relative crosshairs and rulers;
+- displays the screenshot and `UIElementRenderTree` side by side;
+- uses one `SuperSelectorBoxModel` for the live outline, screenshot annotation, tree highlight, and replay coordinates;
+- shows provider availability and every durable evidence field;
+- records clicks, scrolling, text, keys, and semantic target transitions as `ComputerUseWorkflowStep` values;
+- keeps the 15 most recent exact selectors in newest-first order;
+- copies a selector sampled at the exact click location; and
+- resolves a pasted `ss3/e1` target for visual inspection without acting on it.
 
-The resolver should be tuned to avoid false positives. A cache miss can trigger another inspection or a fresh model decision. A false cache hit can send an input event to the wrong element.
+The overlay and status item are excluded from clean screenshots. The overlay also hides while its own menu is active so it does not become part of the target application state.
 
-Keeping generation exact also leaves room for different resolution policies. A read-only hover action may tolerate a weaker match. A click on a destructive control can require strong agreement between semantic, structural, and geometric hints.
+Open **SuperSelector Studio…** from the menu bar or press **Command-Shift-I**.
 
-## `SuperSelector.app`
+### Recording workspace
 
-The app is a live view of the generation side on macOS. As the cursor moves, it:
+The three-column workspace keeps the workflow library, ordered actions, and selected-step evidence visible together. A selected step contains:
 
-- draws translucent pink crosshairs and ruler ticks on the current display;
-- outlines the macOS Accessibility element under the cursor;
-- runs the registered hint providers continuously;
-- updates the final SuperSelector string;
-- shows every expanded hint on its own line;
-- labels each hint with its provider, category, value, metadata, and privacy class;
-- shows the availability state of each provider;
-- renders live `superselector.breadcrumbs` as a linked history of independently resolvable SuperSelectors for semantic hovers, clicks, typing, keys, and coalesced scroll gestures;
-- gives every history node its own readable AX ancestry and interaction sub-breadcrumbs, with one SuperSelector per line and the current hovered selector as the live tail; every mouse hover, click, or scroll includes an offset from the previous linked target's top-left;
-- resets the breadcrumb route when Escape is pressed twice quickly, without intercepting either key press;
-- copies a fresh selector sampled at the exact click location whenever a click passes through to another app;
-- keeps the 15 most recent exact selectors in a newest-first menu section, using exact-string deduplication only;
-- provides **Resolve selector…** in the menu bar to paste an `ss3/e1` selector and temporarily pin its screen-provider crosshairs and outline.
-
-The current app registers `screen.absolute` and `mac.ax`.
-
-`screen.absolute` emits display and screen geometry. `mac.ax` calls the macOS system Accessibility APIs to read stable application identity (bundle ID, bundle path, executable path, and name), containing-window identity, role, subrole, identifier, title, description, value, actions, state, bounds, and ancestor roles for the element under the cursor. It deliberately does not emit the process ID.
-
-The overlay uses provider icons and category colors so changes are easy to follow while moving between applications and UI elements.
-
-The overlay is hidden while the pointer is over SuperSelector's own status item and while its menu is open, so the inspector does not cover or record its own controls.
-
-### SuperSelector Studio
-
-The app now includes a compact workflow IDE for debugging selectors as computer-use scripts-as-data. Open **SuperSelector Studio…** from the menu bar (or press Command-Shift-I) to:
-
-- browse recorded trails and their action-by-action timelines;
-- inspect a clean screenshot captured for every breadcrumb, with SuperSelector's panels/status item excluded and the saved element box and pointer crosshairs rendered afterward in both timeline and detail previews;
-- inspect the readable breadcrumbs, final selector, and editable JSON together;
-- select any step and **GOTO** it using the existing crosshairs, outline, and inspector;
-- replay the complete workflow or replay only through a selected point in time;
-- copy or import a workflow log as JSON, or import/export it as a file.
-
-#### Studio tour
-
-The three-column Studio keeps saved trails, the action timeline, and the selected step's evidence visible together. The JSON editor stays unloaded until requested so large histories remain responsive.
+- its durable `ss3/e1` target;
+- readable semantic target path;
+- `ComputerUseRecordedAction` payload;
+- clean screenshot asset;
+- screen, window, target, and pointer geometry;
+- bounded agent-tree text; and
+- capture and action timestamps.
 
 <p align="center">
-  <img width="100%" alt="SuperSelector Studio showing recorded trails, an action timeline, the human-readable script, final selector, and replay controls" src="docs/media/studio-overview.png" />
+  <img width="100%" alt="SuperSelector Studio showing workflow recordings, an action timeline, the human-readable script, final selector, and replay controls" src="docs/media/studio-overview.png" />
 </p>
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img width="100%" alt="SuperSelector Studio empty state before recording a workflow" src="docs/media/studio-empty-state.png" />
-      <br /><sub><b>Start clean.</b> Create a trail from the toolbar, then click, type, or scroll in another app.</sub>
+      <img width="100%" alt="SuperSelector Studio before recording a Computer Use workflow" src="docs/media/studio-empty-state.png" />
+      <br /><sub><b>Start a recording.</b> Interact with another application while Studio captures targets, actions, trees, and screenshots.</sub>
     </td>
     <td width="50%" valign="top">
-      <img width="100%" alt="SuperSelector Studio selected step with annotated screenshot and human-readable script" src="docs/media/studio-step-detail.png" />
-      <br /><sub><b>Inspect any step.</b> Timeline actions retain an annotated screenshot, semantic target, readable script, and exact selector.</sub>
+      <img width="100%" alt="A selected Computer Use workflow step with annotated screenshot and agent tree" src="docs/media/studio-step-detail.png" />
+      <br /><sub><b>Inspect a step.</b> The screenshot box and tree index identify the same target in the same Skyshot.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img width="100%" alt="SuperSelector recording controls and visual inspector with application identity tree and coordinate map" src="docs/media/recording-inspector.png" />
-      <br /><sub><b>Record without losing context.</b> Reset, pause, or end from the floating recorder while the inspector visualizes provenance, semantic identity, capabilities, and coordinate spaces.</sub>
+      <img width="100%" alt="SuperSelector recording controls and Skyshot inspector" src="docs/media/recording-inspector.png" />
+      <br /><sub><b>Inspect live evidence.</b> Provider provenance, agent tree, target identity, state, actions, and geometry remain visible together.</sub>
     </td>
     <td width="50%" valign="top">
-      <img width="100%" alt="SuperSelector replay controls for full replay, replay to a selected step, and speed adjustment" src="docs/media/studio-replay-controls.png" />
-      <br /><sub><b>Replay forward in time.</b> Run the whole trail or stop at the selected step, with an adjustable visualization delay.</sub>
+      <img width="100%" alt="SuperSelector cached execution controls" src="docs/media/studio-replay-controls.png" />
+      <br /><sub><b>Execute deterministically.</b> Run from a normalized desktop, replay through a selected step, or execute a cached action range against the current UI.</sub>
     </td>
   </tr>
 </table>
 
-Time travel is intentionally forward-only. Before replay, the runner normalizes the desktop by hiding regular applications and activating Finder, then replays from the first recorded action through the chosen step. Each resolved breadcrumb is previewed with the pink outline and crosshairs before its action, without obscuring the target with the inspector panel; the Studio speed control adjusts that preview delay. The runner activates each target application from stable bundle or path hints and resolves the target again from accessibility hints; it does not undo actions or click stale coordinates. If the resolver cannot identify one safe target, replay stops and the Studio reports the failure instead of guessing.
+### Workflow storage
 
-The Studio uses native split navigation, toolbars, inspectors, and tables. On macOS 26 its replay controls adopt Liquid Glass, with a material fallback on macOS 14–15.
+`ComputerUseWorkflowLibrary` uses JSON schema 2. Screenshot pixels live once in the top-level asset table; individual steps reference an asset and retain their exact capture geometry. This keeps recordings self-contained without embedding the same JPEG repeatedly.
 
-All geometry consumers share `SuperSelectorBoxModel`: hint generation, the live box/rulers, the inspector's box-model diagram, screenshot annotations, and replay's moved-element point reconstruction. This keeps top-left Quartz coordinates, display normalization, and relative click offsets from drifting into separate implementations.
+Each `ComputerUseWorkflowRecording` carries a Computer Use bridge contract:
 
-Workflow JSON schema 2 stores screenshot pixels once in a top-level asset table and lets each breadcrumb reference its image plus exact box-model geometry. Repeated workflow prefixes therefore remain self-contained for clipboard/file export without embedding the same JPEG once per step per saved selector. The AX provider also emits ordered `ancestor.node` hints (role, depth, label/title, native identifier, and value when present), which the inspector renders as an indented identity tree rather than a flat role list.
-
-The resolver decodes the lossless format and first scopes directly to the currently running app by stable application identity, then to an exact AX window when one was recorded. A focused-element hint can be checked directly. Otherwise it traverses only the smallest available AX subtree, applying cheap role, native identifier, text, and ancestor predicates before hydrating full candidates. macOS does not expose a general system-wide query-by-label API, so traversal remains the last step when direct scope is insufficient.
-
-It requires exact application and role agreement plus a strong identifier, name/value, or structural match; then it uses the remaining AX hints as corroboration and declines tied results. Coordinates never select or rank an AX candidate. Only after one position-independent candidate wins are the current bounds used to preserve the original click's relative offset within that element. This allows an element to resolve after scrolling or window movement without replaying stale absolute coordinates. A selector without usable AX identity falls back to its `screen.absolute` hints. The resolver only visualizes the result and never clicks.
-
-## Adding a provider
-
-Providers implement this protocol:
-
-```swift
-protocol HintProvider {
-  var id: String { get }
-  func report(for scene: SceneSnapshot) -> ProviderReport
-  func hints(for scene: SceneSnapshot) -> [Hint]
+```json
+{
+  "format": "computer-use.workflow",
+  "version": 1,
+  "captureModel": "skyshot",
+  "agentTree": "appstate.text",
+  "durableTarget": "superselector.ss3/e1",
+  "cachedExecution": "resolve-then-act",
+  "cacheMiss": "return-to-computer-use"
 }
 ```
 
-Then they are registered with the engine:
+Recordings can be copied as JSON or imported and exported as files. Persistent data lives under:
 
-```swift
-HintEngine(providers: [
-  AbsoluteScreenHintProvider(),
-  MacAccessibilityHintProvider(),
-  BrowserViewportHintProvider(),
-  BrowserDocumentHintProvider(),
-  BrowserCSSHintProvider(),
-])
+```text
+~/Library/Application Support/SuperSelector/
+  workflow-log.json
+  screenshots/
+  instance.lock
 ```
 
-A browser provider can run beside the existing screen and macOS AX providers. It receives the same scene, finds the browser target and frame at the target point, and emits browser-specific hints into the same observation. The encoder and overlay already accept arbitrary provider IDs, hint kinds, values, and metadata.
+The application holds a single-writer lock for this directory. Launching a second copy activates the existing instance instead of creating competing writers.
 
-## Fuzzy Matching Strategies
+## Resolution
 
-The encoded SuperSelector is a lossless observation, not a commitment to one matching algorithm. A resolver can decode the same provider fields into several indexes or feature representations and choose a policy based on the available providers, action risk, and size of the current scene. Some strategies explored in [`plans/`](plans/) are:
+Resolution compares a durable target with fresh UI evidence. It is deliberately asymmetric: generation preserves all evidence, while resolution can select the fastest safe strategy available for the target and action.
 
-- **Prefix matching with ranked subcomponents.** Compare typed fields independently, reward longer shared prefixes, and rank stable, position-independent hints such as application identity, native identifiers, roles, labels, and ancestor structure above geometry. Provider-specific indexes can retrieve candidates from the most selective fields first. Coordinates should be a last-resort fallback, not evidence that overrides a semantic mismatch.
-- **Lexical and structural retrieval.** Build inverted indexes over exact tokens, substrings, character trigrams, edge n-grams, AX/DOM roles, attributes, labels, and ancestor paths. Boolean intersections cheaply narrow the scene; BM25-style field weights, phrase proximity, or explicit per-field scores can rank the survivors while remaining fast and explainable.
-- **Fuzzy and locality-preserving hashes.** Use a hash suited to each field instead of hashing the whole selector indiscriminately: SimHash for text-like features, MinHash for token sets, LSH bands for candidate lookup, pHash/dHash for visual patches, and geohash- or Morton-style encodings for spatial data. Hamming distance or shared hash prefixes then provide an efficient similarity signal. Raw scalar values should remain prefix-matchable rather than being avalanche-hashed.
-- **Embeddings, RAG, and vector similarity.** Represent structural, textual, contextual, spatial, and visual hints as separate vectors, retrieve nearest candidates with cosine similarity, then rerank the top results. Vectors can come from deterministic feature hashing or learned text/image encoders. Hierarchical retrieval keeps this practical: use cheap exact and lexical filters first, embed only the ambiguous candidates, and add an ANN index such as HNSW only when brute-force comparison is no longer cheap.
-- **Late fusion across providers.** Keep modalities separate instead of concatenating them into one opaque score. A resolver can require agreement between independent sources, vary weights when a provider is missing or known to be unstable, and preserve a useful explanation such as “exact AX identifier plus matching role and label” rather than only reporting a global similarity number.
-- **Tiered visual recovery.** For canvas, OCR-only, or otherwise inaccessible targets, start with inexpensive perceptual features such as pHash, dHash, HOG, edge density, OCR text, and small anchor-relative search windows. Semantic image embeddings can be a slower fallback for the few candidates that remain ambiguous rather than a mandatory full-screen indexing pass.
-- **Confidence gates and abstention.** Candidate retrieval and final acceptance are separate decisions. Require a high absolute score, a sufficient margin over the runner-up, and any mandatory exact invariants before resolving. Ties, contradictory strong hints, or low-information selectors should produce a cache miss and return control to the CUA loop. For SuperSelectors, avoiding a false-positive click is more important than maximizing cache hits.
-- **Measured or learned ranking.** Differential recordings and replay outcomes can estimate which fields actually remain stable for a site or application, calibrate thresholds, or learn lightweight per-band weights. The serialized observation does not need to change when the ranking model changes; model and policy versions belong to the resolver.
+The macOS resolver:
 
-These approaches are complementary. A likely resolver pipeline is direct lookup by stable native identifiers, then indexed lexical/structural candidate generation, then multi-provider scoring or vector reranking, followed by strict ambiguity checks. Visual and coordinate strategies fill gaps when stronger semantic providers are absent.
+1. scopes to a running application using stable bundle or executable identity;
+2. scopes to the recorded window when a durable window identity exists;
+3. checks direct focused-element or native-identifier paths;
+4. traverses the smallest viable AX subtree;
+5. filters candidates by exact application and role invariants;
+6. scores native identity, names, values, ancestry, state, and actions;
+7. requires both an acceptance threshold and an ambiguity margin; and
+8. applies live geometry only after a position-independent target wins.
+
+Coordinates never override a semantic mismatch. They are used as a last-resort target for screen-only recordings or to reconstruct the original relative click point inside a successfully resolved element.
+
+### Matching strategies
+
+The encoded evidence does not commit recordings to one ranking algorithm. Resolvers can combine:
+
+- direct native identifier lookup;
+- exact invariants and prefix comparison;
+- lexical indexes over roles, attributes, labels, values, and ancestor paths;
+- trigram, edge n-gram, BM25, or field-weighted retrieval;
+- SimHash or MinHash for text and token sets;
+- pHash, dHash, HOG, edge density, or color features for visual regions;
+- deterministic feature vectors or learned embeddings;
+- late fusion across independent providers; and
+- application- or workflow-specific stability weights learned from replay outcomes.
+
+Candidate retrieval and acceptance are separate. A target resolves only when its best candidate has enough absolute evidence, sufficient margin over the runner-up, and every risk-specific invariant required by the action. Low-information, tied, or contradictory results are cache misses.
+
+## Cached execution
+
+`CachedComputerUseReplayer` executes a `ComputerUseReplayPlan`. It skips model inference between verified actions but never skips target resolution.
+
+Two plan modes are available:
+
+- **Reset replay** hides regular applications, activates Finder, and executes from the beginning through a chosen step.
+- **Cached subsequence** starts at a marked step and executes through the selected ending step against the current desktop state.
+
+Every action follows the same safety boundary:
+
+```mermaid
+sequenceDiagram
+    participant C as CachedComputerUseReplayer
+    participant A as Target application
+    participant R as Durable target resolver
+    participant CU as Codex Computer Use
+
+    C->>A: activate expected application
+    C->>R: resolve ss3/e1 against fresh UI
+    alt unique target
+        R-->>C: live target and action point
+        C->>A: perform recorded action
+        C->>R: resolve next durable target
+    else missing or ambiguous
+        R-->>C: typed cache miss
+        C-->>CU: failing step and fresh state
+    end
+```
+
+Target resolution is AX-first. The local executor performs the recorded keyboard or pointer input only after resolving a unique live target. Sensitive or externally consequential actions remain subject to Computer Use approvals; cached execution is not an approval bypass.
+
+## Codex Computer Use integration
+
+[Codex Computer Use](https://learn.chatgpt.com/docs/computer-use) is the observation-and-action system for GUI work when command-line tools or structured integrations are insufficient. SuperSelector supplies a durable target and deterministic execution layer beneath that reasoning loop.
+
+[Record & Replay](https://learn.chatgpt.com/docs/extend/record-and-replay) turns a demonstrated workflow into a reusable skill that can use Computer Use, browser actions, plugins, or a combination. A SuperSelector recording is the lower-level execution artifact for steps whose targets and expected transitions can be resolved and verified without another model decision.
+
+The integration boundary is a local plugin containing a small MCP server and skill:
+
+```text
+structured connector or application API
+  → verified cached SuperSelector recording
+    → ordinary Codex Computer Use loop
+```
+
+The bridge surface is intentionally workflow-oriented:
+
+| Tool | Responsibility |
+| --- | --- |
+| `list_workflow_recordings` | Return recording IDs, applications, steps, inputs, and verification age |
+| `get_workflow_recording` | Return the readable plan, input contract, checks, and redacted evidence |
+| `resolve_target` | Resolve a durable target and explain confidence and ambiguity |
+| `verify_workflow` | Dry-resolve every target without performing actions |
+| `run_cached_subsequence` | Execute verified steps and stop at the first cache miss or policy boundary |
+| `ingest_app_state` | Associate authoritative Computer Use tree text and screenshot with a Skyshot |
+| `export_workflow` / `import_workflow` | Share a portable, content-addressed recording |
+
+Authoritative Computer Use state ingestion accepts:
+
+```ts
+type AppState = {
+  app: string
+  screenshot: { url: string } | null
+  text: string
+}
+```
+
+The bridge correlates the agent's chosen element index with the same capture's AX and screenshot evidence, generates a durable SuperSelector, and discards the index when that tree revision expires.
+
+See [Codex Computer Use integration](docs/codex-computer-use-integration.md) for the package boundary, verification contract, sharing format, and implementation roadmap.
 
 ## Build and run
 
-Requires macOS 14+, Xcode Command Line Tools, and a Swift 6 toolchain.
+Requirements:
+
+- macOS 14 or later;
+- Xcode Command Line Tools; and
+- Swift 6.
 
 ```bash
 ./scripts/build-app.sh
 open SuperSelector.app
 ```
 
-The build script uses the first available **Apple Development** signing identity. You can also provide one explicitly:
+The build script uses the first available **Apple Development** signing identity. To choose one explicitly:
 
 ```bash
 SUPERSELECTOR_SIGNING_IDENTITY='Apple Development: Your Name (TEAMID)' \
   ./scripts/build-app.sh
 ```
 
-A stable signature lets macOS keep the app's Accessibility authorization across rebuilds. On first launch, grant access under **System Settings → Privacy & Security → Accessibility**, then quit and reopen the app if the overlay does not appear immediately.
+A stable signature allows macOS to retain Accessibility authorization across rebuilds. On first launch, grant access under **System Settings → Privacy & Security → Accessibility**, then quit and reopen the app if the overlay does not appear.
 
-The script requires a stable signing identity by default. Disposable ad-hoc builds can be enabled with:
+Disposable ad-hoc builds are available for development:
 
 ```bash
 SUPERSELECTOR_ALLOW_ADHOC=1 ./scripts/build-app.sh
 ```
 
-Ad-hoc builds usually require a new Accessibility grant after rebuilding. Use the crosshair item in the menu bar to quit the app.
+Ad-hoc rebuilds commonly require a fresh Accessibility grant.
 
-## Status
+Run the test suite with:
 
-The repository currently implements live selector generation and inspection on macOS, persistent workflow recording, JSON editing/import/export, safe AX-first GOTO resolution, and forward replay through any chosen workflow step. OCR, visual, Windows, browser, and app-specific providers can be added through the existing provider interface.
+```bash
+swift test
+```
+
+## Implementation status
+
+The macOS application implements:
+
+- `screen.absolute` and `mac.ax` capture providers;
+- `ComputerUseSkyshot` capture and inspection;
+- bounded `UIElementRenderTree` rendering;
+- shared screenshot, target, pointer, and display geometry;
+- lossless `ss3/e1` encoding;
+- persistent `ComputerUseWorkflowLibrary` storage;
+- action-by-action screenshots and agent-tree evidence;
+- AX-first durable target resolution;
+- full reset replay, replay through a selected step, and cached subsequences; and
+- JSON clipboard and file import/export.
+
+OCR, visual, Windows UIA, browser, framework-specific capture providers, authoritative `AppState` ingestion, postcondition fingerprints, and the local MCP/skill package are defined extension points.

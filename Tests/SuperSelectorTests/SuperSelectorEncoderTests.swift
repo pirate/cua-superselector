@@ -3,6 +3,63 @@ import XCTest
 @testable import SuperSelector
 
 final class SuperSelectorEncoderTests: XCTestCase {
+  func testComputerUseNodeAPIRendererMatchesAgentFacingGrammar() {
+    let tree = UIElementRenderTree(
+      applicationName: "Finder",
+      bundleIdentifier: "com.apple.finder",
+      windowTitle: "Desktop",
+      nodes: [
+        AccessibilityNode(
+          elementIndex: 0, depth: 0, role: "scroll area", name: "desktop",
+          enabled: false),
+        AccessibilityNode(
+          elementIndex: 1, depth: 1, role: "container", name: "desktop",
+          focused: true),
+        AccessibilityNode(
+          elementIndex: 2, depth: 2, role: "image", name: "Archive",
+          secondaryActions: ["open"], isTarget: true),
+      ],
+      truncated: false
+    )
+
+    XCTAssertEqual(
+      ComputerUseNodeAPIRenderer.render(tree),
+      """
+      Window: \"Desktop\", App: Finder.
+      0 scroll area (disabled) desktop
+      \t1 container desktop
+      \t\t2 image Archive Secondary Actions: open
+
+      The focused UI element is 1 container desktop
+      """
+    )
+    XCTAssertEqual(tree.targetElementIndex, 2)
+    XCTAssertEqual(tree.focusedElementIndex, 1)
+  }
+
+  func testComputerUseRenderTreeHighlightsCurrentTargetWithoutPersistingIndex() {
+    var target = AXElementSnapshot()
+    target.applicationName = "Example"
+    target.role = "AXButton"
+    target.identifier = "save"
+    target.title = "Save"
+    target.frameInQuartzCoordinates = CGRect(x: 40, y: 50, width: 80, height: 30)
+    let tree = UIElementRenderTree(
+      applicationName: "Example",
+      bundleIdentifier: "com.example",
+      windowTitle: nil,
+      nodes: [
+        AccessibilityNode(
+          elementIndex: 19, depth: 0, role: "button", name: "Save",
+          nativeIdentifier: "save", frameQuartz: target.frameInQuartzCoordinates)
+      ],
+      truncated: false
+    ).highlighting(target)
+
+    XCTAssertEqual(tree.targetElementIndex, 19)
+    XCTAssertTrue(ComputerUseNodeAPIRenderer.render(tree).contains("19 button Save"))
+  }
+
   func testRecentHistoryExactlyDeduplicatesAndMovesNewestFirst() {
     var history = RecentSelectorHistory(maximumEntries: 3)
     history.record("first", at: Date(timeIntervalSince1970: 1))

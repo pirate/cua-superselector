@@ -19,7 +19,9 @@ enum WorkflowReplayError: LocalizedError {
   }
 }
 
-final class MacWorkflowReplayer {
+/// Deterministic Computer Use fast path. It skips model inference, but never
+/// skips fresh durable-target resolution before an action.
+final class CachedComputerUseReplayer {
   typealias Progress = @MainActor (
     Int, SuperSelectorWorkflowStep, ResolvedSelectorTarget
   ) -> Void
@@ -29,7 +31,9 @@ final class MacWorkflowReplayer {
     stepDelay: TimeInterval = 0.18,
     progress: @escaping Progress
   ) async throws {
-    try await resetToNormalizedDesktop()
+    if plan.reset == .normalizedEmptyDesktop {
+      try await resetToNormalizedDesktop()
+    }
     for (index, step) in plan.steps.enumerated() {
       try Task.checkCancellation()
       try await activateTargetApplication(for: step.selector)
@@ -264,6 +268,8 @@ final class MacWorkflowReplayer {
     "n": 45, "m": 46, ".": 47, "`": 50,
   ]
 }
+
+typealias MacWorkflowReplayer = CachedComputerUseReplayer
 
 private extension String.UTF16View {
   func chunked(maximumCount: Int) -> [[UInt16]] {

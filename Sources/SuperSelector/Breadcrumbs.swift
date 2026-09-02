@@ -73,6 +73,7 @@ struct SuperSelectorBreadcrumbLink: Sendable, Equatable {
   let elementFrameQuartz: CGRect?
   let pointerQuartz: CGPoint
   let screenshot: BreadcrumbScreenshot?
+  let appStateText: String
   let previousIndex: Int?
   let occurredAt: Date
 
@@ -100,6 +101,7 @@ struct BreadcrumbTrail: Sendable {
     let cursorQuartz: CGPoint
     let elementFrameQuartz: CGRect?
     let screenshot: BreadcrumbScreenshot?
+    let appStateText: String
     let observedSince: Date
   }
 
@@ -161,6 +163,7 @@ struct BreadcrumbTrail: Sendable {
       cursorQuartz: observation.scene.cursorQuartz,
       elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
       screenshot: screenshot,
+      appStateText: Self.agentStateText(for: observation),
       observedSince: date
     )
     guard let previous = liveTarget else {
@@ -176,6 +179,7 @@ struct BreadcrumbTrail: Sendable {
         cursorQuartz: target.cursorQuartz,
         elementFrameQuartz: target.elementFrameQuartz,
         screenshot: screenshot ?? previous.screenshot,
+        appStateText: target.appStateText,
         observedSince: previous.observedSince
       )
       return
@@ -202,6 +206,7 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: previous.elementFrameQuartz,
         pointerQuartz: previous.cursorQuartz,
         screenshot: previous.screenshot,
+        appStateText: previous.appStateText,
         at: date
       )
     }
@@ -231,6 +236,7 @@ struct BreadcrumbTrail: Sendable {
       elementFrameQuartz: frame,
       pointerQuartz: quartzPoint,
       screenshot: liveTarget?.screenshot ?? screenshot,
+      appStateText: Self.agentStateText(for: observation),
       at: occurredAt
     )
     liveTargetWasCommitted = true
@@ -268,6 +274,7 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
         screenshot: liveTarget?.screenshot ?? screenshot ?? previous.screenshot,
+        appStateText: Self.agentStateText(for: observation),
         previousIndex: previous.previousIndex,
         occurredAt: occurredAt
       )
@@ -285,6 +292,7 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: frame,
         pointerQuartz: quartzPoint,
         screenshot: liveTarget?.screenshot ?? screenshot,
+        appStateText: Self.agentStateText(for: observation),
         at: occurredAt
       )
     }
@@ -315,6 +323,7 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
         pointerQuartz: observation.scene.cursorQuartz,
         screenshot: liveTarget?.screenshot ?? screenshot ?? previous.screenshot,
+        appStateText: Self.agentStateText(for: observation),
         previousIndex: previous.previousIndex,
         occurredAt: occurredAt
       )
@@ -327,6 +336,7 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
         pointerQuartz: observation.scene.cursorQuartz,
         screenshot: liveTarget?.screenshot ?? screenshot,
+        appStateText: Self.agentStateText(for: observation),
         at: occurredAt
       )
     }
@@ -349,6 +359,7 @@ struct BreadcrumbTrail: Sendable {
       elementFrameQuartz: observation.scene.accessibilityElement?.frameInQuartzCoordinates,
       pointerQuartz: observation.scene.cursorQuartz,
       screenshot: liveTarget?.screenshot ?? screenshot,
+      appStateText: Self.agentStateText(for: observation),
       at: occurredAt
     )
     liveTargetWasCommitted = true
@@ -362,6 +373,7 @@ struct BreadcrumbTrail: Sendable {
     elementFrameQuartz: CGRect?,
     pointerQuartz: CGPoint,
     screenshot: BreadcrumbScreenshot?,
+    appStateText: String,
     at date: Date
   ) {
     let index = links.count
@@ -374,10 +386,18 @@ struct BreadcrumbTrail: Sendable {
         elementFrameQuartz: elementFrameQuartz,
         pointerQuartz: pointerQuartz,
         screenshot: screenshot,
+        appStateText: appStateText,
         previousIndex: tailIndex,
         occurredAt: date
       ))
     tailIndex = index
+  }
+
+  private static func agentStateText(for observation: SuperSelectorObservation) -> String {
+    let rendered = ComputerUseNodeAPIRenderer.render(observation.renderTree)
+    let maximumCharacters = 48_000
+    guard rendered.count > maximumCharacters else { return rendered }
+    return String(rendered.prefix(maximumCharacters - 24)) + "\n… capture truncated …"
   }
 
   private func mouseOffset(at point: CGPoint, currentFrame: CGRect?) -> CGPoint {

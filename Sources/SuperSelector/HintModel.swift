@@ -1,7 +1,9 @@
 import AppKit
 import Foundation
 
-struct Hint: Sendable {
+/// Durable, replayable evidence. Unlike a Computer Use `element_index`, these
+/// hints are designed to survive later captures, app launches, and machines.
+struct DurableTargetHint: Sendable {
   enum ValueType: String, Sendable {
     case scalar = "n"
     case text = "s"
@@ -87,7 +89,7 @@ struct AXBreadcrumbNode: Sendable, Equatable {
   var semanticAttributes: [String: String] = [:]
 }
 
-struct SceneSnapshot: Sendable {
+struct ComputerUseCaptureContext: Sendable {
   let sampledAt: Date
   let cursorQuartz: CGPoint
   let cursorAppKit: CGPoint
@@ -102,14 +104,31 @@ struct SceneSnapshot: Sendable {
   }
 }
 
-struct SuperSelectorObservation: Sendable {
-  let scene: SceneSnapshot
-  let providerReports: [ProviderReport]
-  let hints: [Hint]
+/// Studio's model of a Computer Use Skyshot: one capture context, one
+/// revision-local agent tree, plus durable target hints for later resolution.
+struct ComputerUseSkyshot: Sendable {
+  let scene: ComputerUseCaptureContext
+  let providerReports: [CaptureProviderReport]
+  let hints: [DurableTargetHint]
   let compactSelector: String
+  let renderTree: UIElementRenderTree
+
+  init(
+    scene: ComputerUseCaptureContext,
+    providerReports: [CaptureProviderReport],
+    hints: [DurableTargetHint],
+    compactSelector: String,
+    renderTree: UIElementRenderTree? = nil
+  ) {
+    self.scene = scene
+    self.providerReports = providerReports
+    self.hints = hints
+    self.compactSelector = compactSelector
+    self.renderTree = renderTree ?? .targetBranch(from: scene.accessibilityElement)
+  }
 }
 
-struct ProviderReport: Sendable {
+struct CaptureProviderReport: Sendable {
   enum State: String, Sendable {
     case available
     case degraded
@@ -121,11 +140,19 @@ struct ProviderReport: Sendable {
   let detail: String?
 }
 
-protocol HintProvider {
+protocol ComputerUseCaptureProvider {
   var id: String { get }
-  func report(for scene: SceneSnapshot) -> ProviderReport
-  func hints(for scene: SceneSnapshot) -> [Hint]
+  func report(for scene: ComputerUseCaptureContext) -> CaptureProviderReport
+  func hints(for scene: ComputerUseCaptureContext) -> [DurableTargetHint]
 }
+
+// Source-compatible names for the ss3 encoder/provider API. New capture and
+// UI code should use the Computer Use terminology above.
+typealias Hint = DurableTargetHint
+typealias SceneSnapshot = ComputerUseCaptureContext
+typealias SuperSelectorObservation = ComputerUseSkyshot
+typealias ProviderReport = CaptureProviderReport
+typealias HintProvider = ComputerUseCaptureProvider
 
 enum CoordinateSpaces {
   static var primaryScreenTop: CGFloat {

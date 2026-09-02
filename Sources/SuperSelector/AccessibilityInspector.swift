@@ -27,6 +27,13 @@ enum AccessibilityInspector {
     let windowTitle: String?
   }
 
+  private struct RenderTraversalNode {
+    let element: AXUIElement
+    let depth: Int
+    let windowIdentifier: String?
+    let windowTitle: String?
+  }
+
   private struct AncestorContext {
     var roles: [String] = []
     var breadcrumbNodes: [AXBreadcrumbNode] = []
@@ -201,6 +208,110 @@ enum AccessibilityInspector {
       }
     }
     return results
+  }
+
+  /// Captures the app's current AX hierarchy into the revision-local model that
+  /// Studio renders beside its screenshot. The target is only a highlight;
+  /// callers must not persist or replay `elementIndex` values from this tree.
+  static func computerUseRenderTree(
+    around target: AXElementSnapshot,
+    maximumElements: Int = 600
+  ) -> UIElementRenderTree {
+    guard AXIsProcessTrusted(), maximumElements > 0 else {
+      return .targetBranch(from: target)
+    }
+
+    let application = runningApplication(for: target)
+    guard let application else { return .targetBranch(from: target) }
+    let root = AXUIElementCreateApplication(application.processIdentifier)
+    var roots = descendants(of: root)
+    if roots.isEmpty { roots = rootWindows(of: root) }
+    var stack = roots.reversed().map {
+      RenderTraversalNode(
+        element: $0,
+        depth: 0,
+        windowIdentifier: nil,
+        windowTitle: nil
+      )
+    }
+    var visited: Set<CFHashCode> = []
+    var nodes: [AccessibilityNode] = []
+
+    while let current = stack.popLast(), nodes.count < maximumElements {
+      let identity = CFHash(current.element)
+      guard visited.insert(identity).inserted else { continue }
+      let nativeRole = stringAttribute(current.element, kAXRoleAttribute)
+      let windowIdentifier =
+        nativeRole == kAXWindowRole
+        ? stringAttribute(current.element, kAXIdentifierAttribute) : current.windowIdentifier
+      let windowTitle =
+        nativeRole == kAXWindowRole
+        ? stringAttribute(current.element, kAXTitleAttribute) : current.windowTitle
+      guard
+        let snapshot = snapshot(
+          from: current.element,
+          ancestorRoles: [],
+          ancestorBreadcrumbNodes: [],
+          windowIdentifier: windowIdentifier,
+          windowTitle: windowTitle
+        )
+      else { continue }
+
+      nodes.append(
+        AccessibilityNode(
+          elementIndex: nodes.count,
+          depth: current.depth,
+          role: ComputerUseNodeAPIRenderer.role(snapshot.role),
+          name: ComputerUseNodeAPIRenderer.firstText(
+            snapshot.title, snapshot.label, snapshot.help, snapshot.identifier),
+          value: snapshot.value,
+          nativeIdentifier: snapshot.identifier,
+          enabled: snapshot.enabled,
+          focused: snapshot.focused,
+          selected: snapshot.selected,
+          frameQuartz: snapshot.frameInQuartzCoordinates,
+          secondaryActions: ComputerUseNodeAPIRenderer.secondaryActions(snapshot.actions)
+        ))
+
+      let children = descendants(of: current.element)
+      for child in children.reversed() {
+        stack.append(
+          RenderTraversalNode(
+            element: child,
+            depth: current.depth + 1,
+            windowIdentifier: windowIdentifier,
+            windowTitle: windowTitle
+          ))
+      }
+    }
+
+    guard !nodes.isEmpty else { return .targetBranch(from: target) }
+    return UIElementRenderTree(
+      applicationName: target.applicationName ?? application.localizedName,
+      bundleIdentifier: target.bundleIdentifier ?? application.bundleIdentifier,
+      windowTitle: target.windowTitle,
+      nodes: nodes,
+      truncated: stack.isEmpty == false
+    ).highlighting(target)
+  }
+
+  private static func runningApplication(for target: AXElementSnapshot) -> NSRunningApplication? {
+    if let bundleIdentifier = target.bundleIdentifier,
+      let application = NSRunningApplication.runningApplications(
+        withBundleIdentifier: bundleIdentifier
+      ).first
+    {
+      return application
+    }
+    return NSWorkspace.shared.runningApplications.first { application in
+      if let path = target.applicationBundlePath, application.bundleURL?.path == path { return true }
+      if let executable = target.applicationExecutablePath,
+        application.executableURL?.path == executable
+      {
+        return true
+      }
+      return target.applicationName != nil && application.localizedName == target.applicationName
+    }
   }
 
   private static func cheapMatch(

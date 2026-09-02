@@ -836,7 +836,8 @@ final class OverlayCoordinator {
     guard let observation = latestObservation else { return }
     inspectorView.update(
       with: observation,
-      breadcrumbs: breadcrumbTrail.rendered(current: observation, maximumLinks: 6)
+      breadcrumbs: breadcrumbTrail.rendered(current: observation, maximumLinks: 6),
+      screenshot: breadcrumbTrail.screenshot(for: observation)
     )
   }
 

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-struct SuperSelectorWorkflowLog: Codable, Equatable, Sendable {
+struct ComputerUseWorkflowLibrary: Codable, Equatable, Sendable {
   static let currentSchemaVersion = 2
 
   var schemaVersion = currentSchemaVersion
@@ -66,17 +66,31 @@ struct SuperSelectorWorkflowLog: Codable, Equatable, Sendable {
   }
 }
 
-struct SuperSelectorWorkflow: Codable, Identifiable, Equatable, Sendable {
+struct ComputerUseWorkflowBridgeMetadata: Codable, Equatable, Sendable {
+  var format = "computer-use.workflow"
+  var version = 1
+  var captureModel = "skyshot"
+  var agentTree = "appstate.text"
+  var durableTarget = "superselector.ss3/e1"
+  var cachedExecution = "resolve-then-act"
+  var cacheMiss = "return-to-computer-use"
+}
+
+struct ComputerUseWorkflowRecording: Codable, Identifiable, Equatable, Sendable {
   var id = UUID()
   var name: String
   var createdAt = Date()
   var updatedAt = Date()
   var breadcrumbs: [SuperSelectorWorkflowStep]
   var finalSelector: String
+  /// Declares how a shared recording plugs into Computer Use. Optional keeps
+  /// existing schema-2 logs source- and wire-compatible.
+  var computerUse: ComputerUseWorkflowBridgeMetadata?
 
   init(
     id: UUID = UUID(), name: String, createdAt: Date = Date(), updatedAt: Date = Date(),
-    breadcrumbs: [SuperSelectorWorkflowStep], finalSelector: String
+    breadcrumbs: [SuperSelectorWorkflowStep], finalSelector: String,
+    computerUse: ComputerUseWorkflowBridgeMetadata? = .init()
   ) {
     self.id = id
     self.name = name
@@ -84,6 +98,7 @@ struct SuperSelectorWorkflow: Codable, Identifiable, Equatable, Sendable {
     self.updatedAt = updatedAt
     self.breadcrumbs = breadcrumbs
     self.finalSelector = finalSelector
+    self.computerUse = computerUse
   }
 
   init(name: String, trail: BreadcrumbTrail, finalSelector: String, at date: Date = Date()) {
@@ -119,22 +134,51 @@ struct SuperSelectorWorkflow: Codable, Identifiable, Equatable, Sendable {
       throw SuperSelectorWorkflowError.invalidStepIndex(index)
     }
     return SuperSelectorReplayPlan(
+      reset: .normalizedEmptyDesktop,
       steps: Array(breadcrumbs.prefix(through: index)),
-      highlightSelector: breadcrumbs[index].selector
+      highlightSelector: breadcrumbs[index].selector,
+      sourceStartIndex: 0
+    )
+  }
+
+  /// Runs a recorded action subsequence against the current desktop state.
+  /// Every target is resolved again from durable hints; no model inference or
+  /// snapshot-local Computer Use element index is required on a cache hit.
+  func cachedReplayPlan(from startIndex: Int, through endIndex: Int) throws
+    -> SuperSelectorReplayPlan
+  {
+    guard breadcrumbs.indices.contains(startIndex), breadcrumbs.indices.contains(endIndex),
+      startIndex <= endIndex
+    else {
+      throw SuperSelectorWorkflowError.invalidStepRange(startIndex, endIndex)
+    }
+    return SuperSelectorReplayPlan(
+      reset: .none,
+      steps: Array(breadcrumbs[startIndex...endIndex]),
+      highlightSelector: breadcrumbs[endIndex].selector,
+      sourceStartIndex: startIndex
     )
   }
 
   var gotoPlan: SuperSelectorReplayPlan {
-    SuperSelectorReplayPlan(steps: breadcrumbs, highlightSelector: finalSelector)
+    SuperSelectorReplayPlan(
+      reset: .normalizedEmptyDesktop,
+      steps: breadcrumbs,
+      highlightSelector: finalSelector,
+      sourceStartIndex: 0
+    )
   }
 }
 
-struct SuperSelectorWorkflowStep: Codable, Identifiable, Equatable, Sendable {
+struct ComputerUseWorkflowStep: Codable, Identifiable, Equatable, Sendable {
   var id = UUID()
   var selector: String
   var targetPath: String
   var action: SuperSelectorWorkflowAction
   var screenshot: WorkflowScreenshot?
+  /// The exact agent-facing AX render captured with this action. Optional so
+  /// schema-2 recordings created before Computer Use compatibility still load.
+  var appStateText: String?
   var occurredAt = Date()
 
   init(_ link: SuperSelectorBreadcrumbLink) {
@@ -149,12 +193,14 @@ struct SuperSelectorWorkflowStep: Codable, Identifiable, Equatable, Sendable {
         pointerQuartz: WorkflowPoint(link.pointerQuartz)
       )
     }
+    appStateText = link.appStateText
     occurredAt = link.occurredAt
   }
 
   init(
     id: UUID = UUID(), selector: String, targetPath: String,
     action: SuperSelectorWorkflowAction, screenshot: WorkflowScreenshot? = nil,
+    appStateText: String? = nil,
     occurredAt: Date = Date()
   ) {
     self.id = id
@@ -162,6 +208,7 @@ struct SuperSelectorWorkflowStep: Codable, Identifiable, Equatable, Sendable {
     self.targetPath = targetPath
     self.action = action
     self.screenshot = screenshot
+    self.appStateText = appStateText
     self.occurredAt = occurredAt
   }
 }
@@ -203,7 +250,7 @@ struct WorkflowRect: Codable, Equatable, Sendable {
   var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-struct SuperSelectorWorkflowAction: Codable, Equatable, Sendable {
+struct ComputerUseRecordedAction: Codable, Equatable, Sendable {
   enum Kind: String, Codable, Sendable { case hover, click, scroll, type, key }
 
   var kind: Kind
@@ -261,16 +308,18 @@ struct WorkflowPoint: Codable, Equatable, Sendable {
   init(_ point: CGPoint) { (x, y) = (point.x, point.y) }
 }
 
-struct SuperSelectorReplayPlan: Equatable, Sendable {
-  enum Reset: Equatable, Sendable { case normalizedEmptyDesktop }
+struct ComputerUseReplayPlan: Equatable, Sendable {
+  enum Reset: Equatable, Sendable { case none, normalizedEmptyDesktop }
 
-  let reset: Reset = .normalizedEmptyDesktop
+  let reset: Reset
   let steps: [SuperSelectorWorkflowStep]
   let highlightSelector: String
+  let sourceStartIndex: Int
 }
 
 enum SuperSelectorWorkflowError: Error, Equatable, LocalizedError {
   case invalidStepIndex(Int)
+  case invalidStepRange(Int, Int)
   case unsupportedSchemaVersion(Int)
   case clipboardHasNoText
 
@@ -278,6 +327,8 @@ enum SuperSelectorWorkflowError: Error, Equatable, LocalizedError {
     switch self {
     case .invalidStepIndex(let index):
       return "Workflow step \(index + 1) does not exist."
+    case .invalidStepRange(let start, let end):
+      return "Workflow step range \(start + 1)…\(end + 1) is invalid."
     case .unsupportedSchemaVersion(let version):
       return "Workflow schema version \(version) is not supported."
     case .clipboardHasNoText:
@@ -285,6 +336,13 @@ enum SuperSelectorWorkflowError: Error, Equatable, LocalizedError {
     }
   }
 }
+
+// Schema-compatible names retained for existing callers and exported JSON.
+typealias SuperSelectorWorkflowLog = ComputerUseWorkflowLibrary
+typealias SuperSelectorWorkflow = ComputerUseWorkflowRecording
+typealias SuperSelectorWorkflowStep = ComputerUseWorkflowStep
+typealias SuperSelectorWorkflowAction = ComputerUseRecordedAction
+typealias SuperSelectorReplayPlan = ComputerUseReplayPlan
 
 private extension BreadcrumbMouseButton {
   var storageName: String {

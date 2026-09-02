@@ -10,15 +10,36 @@ PRODUCT / PLATFORM
 - Architecture: arm64
 - macOS: 26.4.1 (25E253)
 
+COMPONENT RELATIONSHIP
+- ChatGPT Desktop hosts the Codex task and exposes the Computer Use capability.
+- The installed Codex Computer Use.app provides the local macOS integration.
+- Codex Computer Use.app runs SkyComputerUseService as a separate process.
+- Sky uses the macOS Screen Recording and Accessibility permissions to observe
+  application UI and carry out requested interactions.
+- The crashing process is SkyComputerUseService. ChatGPT Desktop and the
+  applications whose UI is being observed remain alive.
+
+AX OWNERSHIP AND TERMINOLOGY
+- Each application exposes accessibility objects describing its current UI;
+  macOS Accessibility makes those objects available to authorized clients.
+- Ordinary application interaction changes the UI and therefore changes the AX
+  hierarchy. The reproducer does not directly edit an AX tree.
+- "TransformedUIElement" is Sky's observed log category, not an operation the
+  user invokes. In this diagnostic, "convert" means Sky reading AX objects and
+  building whatever internal/serializable UI-state representation Computer Use
+  consumes. That interpretation is inferred from the process role, log category,
+  and crash stack; Sky's exact private data model is not publicly documented.
+
 HELPER FINGERPRINT
 - Mach-O UUID: E5BA25EC-FD55-3952-9285-FA5D801C2F2B
 - SHA-256: c92c87195fcccb67a51ed7a58882c8effbed3f6ce7a2fa81978f68255ea652c6
 - CDHash: 0ea72902955906de92ae225a060b294b8472650b
 
 FAILURE CATEGORY
-- Sky is observing or transforming a native application's accessibility tree.
-- During capture, accessibility nodes or windows are invalidated, removed,
-  replaced, or reordered.
+- Sky is reading a native application's accessibility hierarchy to produce a
+  Computer Use state snapshot.
+- During the read, ordinary UI activity causes accessibility nodes or windows
+  to disappear, be replaced, or reorder.
 - Common triggers include SwiftUI subtree replacement, transient AppKit panel
   changes, window visibility changes, foreground-app activation, and interaction
   replay while a state request is in flight.
@@ -26,10 +47,12 @@ FAILURE CATEGORY
   failure; the crash occurs inside SkyComputerUseService.
 
 GENERIC REPRODUCTION SEQUENCE
-1. Launch a native macOS test harness with a dynamic accessibility hierarchy.
+1. Launch a native macOS test harness with a dynamically changing UI.
 2. Have Codex Computer Use request a full state snapshot of the application.
-3. While the snapshot/AX observer is active, rapidly hide, show, destroy, or
-   reorder windows and panels, and replace one or more SwiftUI view subtrees.
+3. While the snapshot/AX observer is active, use normal application actions to
+   hide, show, close, or reorder windows and panels, or replace one or more
+   SwiftUI view subtrees. This naturally changes the AX hierarchy; do not modify
+   accessibility data directly.
 4. Optionally activate a second native app or begin replaying captured input to
    increase AX notification and window-tree churn.
 5. Request another full state during the transition and repeat as necessary.
@@ -63,20 +86,21 @@ TOP CRASH STACK
 8  libswiftCore  Sequence._compactMap
 9  libswiftCore  Sequence.compactMap
 
-Frames 3-9 repeat while the service transforms the accessibility hierarchy.
+Frames 3-9 repeat while the service is processing the accessibility hierarchy.
 The inspected applications remain alive; the process that terminates is
 SkyComputerUseService.
 
 LIKELY FAILURE BOUNDARY
-This is consistent with stale collection bookkeeping while an AX tree revision
-is being transformed or invalidated. AX reads fail during window/app churn, but
-the transformer later removes an element using an index that is no longer valid.
+This is consistent with stale collection bookkeeping while Sky processes an AX
+hierarchy that changes during the read. AX reads fail during window/app churn,
+but the same processing path later removes an element using an index that is no
+longer valid.
 This is a Sky-side resilience defect: ordinary AX invalidation should not be able
 to terminate the service.
 
 REQUESTED DEFENSIVE FIX
-- Snapshot children before transforming them, or serialize transformation and
-  invalidation updates per target/tree generation.
+- Snapshot children before converting them, or serialize conversion and
+  invalidation handling per target/tree generation.
 - Revalidate an index and tree revision before collection removal.
 - Drop, re-resolve, or retry stale AX nodes after UIElementError instead of
   continuing with partially mutated bookkeeping.

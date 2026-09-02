@@ -93,6 +93,25 @@ final class WorkflowLogTests: XCTestCase {
     XCTAssertEqual(try SuperSelectorWorkflowLog.read(from: url), log)
   }
 
+  func testOlderSchemaTwoRecordingLoadsWithoutComputerUseCaptureFields() throws {
+    var object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: sampleLog().jsonData()) as? [String: Any]
+    )
+    var workflows = try XCTUnwrap(object["workflows"] as? [[String: Any]])
+    workflows[0].removeValue(forKey: "computerUse")
+    var steps = try XCTUnwrap(workflows[0]["breadcrumbs"] as? [[String: Any]])
+    for index in steps.indices { steps[index].removeValue(forKey: "appStateText") }
+    workflows[0]["breadcrumbs"] = steps
+    object["workflows"] = workflows
+
+    let decoded = try SuperSelectorWorkflowLog(
+      jsonData: JSONSerialization.data(withJSONObject: object)
+    )
+
+    XCTAssertNil(decoded.workflows[0].computerUse)
+    XCTAssertTrue(decoded.workflows[0].breadcrumbs.allSatisfy { $0.appStateText == nil })
+  }
+
   func testClipboardImportExport() throws {
     let pasteboard = NSPasteboard(name: .init("workflow-log-tests-\(UUID())"))
     let log = sampleLog()
@@ -113,6 +132,18 @@ final class WorkflowLogTests: XCTestCase {
     XCTAssertEqual(workflow.gotoPlan.steps, workflow.breadcrumbs)
     XCTAssertEqual(workflow.gotoPlan.highlightSelector, "ss3/final")
     XCTAssertThrowsError(try workflow.replayPlan(through: 2))
+  }
+
+  func testCachedReplayPlanRunsOnlySelectedSubsequenceWithoutDesktopReset() throws {
+    let workflow = sampleWorkflow()
+
+    let plan = try workflow.cachedReplayPlan(from: 1, through: 1)
+
+    XCTAssertEqual(plan.reset, .none)
+    XCTAssertEqual(plan.sourceStartIndex, 1)
+    XCTAssertEqual(plan.steps.map(\.selector), ["ss3/second"])
+    XCTAssertEqual(plan.highlightSelector, "ss3/second")
+    XCTAssertThrowsError(try workflow.cachedReplayPlan(from: 1, through: 0))
   }
 
   func testEditingAndLogUpsert() throws {

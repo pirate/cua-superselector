@@ -15,6 +15,7 @@ final class HintEngine {
   ]
 
   private let providers: [any HintProvider]
+  private let renderTreeCache = UIElementRenderTreeCache()
   private let inspectionQueue = DispatchQueue(
     label: "SuperSelector.AccessibilityInspector", qos: .userInteractive)
   private var inspectionInFlight = false
@@ -54,7 +55,7 @@ final class HintEngine {
           .stringValue
       } ?? "unknown"
 
-    inspectionQueue.async { [providers] in
+    inspectionQueue.async { [providers, renderTreeCache] in
       let element = trusted ? AccessibilityInspector.inspect(at: quartzPoint) : nil
       let scene = SceneSnapshot(
         sampledAt: Date(),
@@ -101,7 +102,8 @@ final class HintEngine {
         scene: scene,
         providerReports: providerReports,
         hints: hints,
-        compactSelector: SuperSelectorEncoder.encode(hints)
+        compactSelector: SuperSelectorEncoder.encode(hints),
+        renderTree: renderTreeCache.tree(for: element)
       )
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }

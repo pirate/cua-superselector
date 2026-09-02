@@ -8,6 +8,7 @@ final class WorkflowIDEModel {
   var log: SuperSelectorWorkflowLog
   var selectedWorkflowID: UUID?
   var selectedStepID: UUID?
+  var replayStartStepID: UUID?
   var editorJSON = ""
   var status = "Ready"
   var replayProgress: Int?
@@ -67,6 +68,11 @@ final class WorkflowIDEModel {
     return workflow.breadcrumbs.last
   }
 
+  var replayStartStepIndex: Int? {
+    guard let workflow = selectedWorkflow, let replayStartStepID else { return nil }
+    return workflow.breadcrumbs.firstIndex { $0.id == replayStartStepID }
+  }
+
   func record(selector: String, trail: BreadcrumbTrail, at date: Date = Date()) {
     var workflow = SuperSelectorWorkflow(
       name: Self.workflowName(for: selector),
@@ -97,6 +103,7 @@ final class WorkflowIDEModel {
   func selectWorkflow(_ id: UUID?) {
     selectedWorkflowID = id
     selectedStepID = selectedWorkflow?.breadcrumbs.last?.id
+    replayStartStepID = nil
     editorJSON = ""
   }
 
@@ -120,6 +127,7 @@ final class WorkflowIDEModel {
     pruneScreenshotAssets()
     selectedWorkflowID = log.workflows.first?.id
     selectedStepID = selectedWorkflow?.breadcrumbs.last?.id
+    replayStartStepID = nil
     changed("Deleted workflow")
   }
 
@@ -128,6 +136,7 @@ final class WorkflowIDEModel {
     selectedWorkflowID = nil
     selectedStepID = nil
     replayProgress = nil
+    replayStartStepID = nil
     editorJSON = ""
     pruneScreenshotAssets()
     changed("Cleared all recent trails")
@@ -228,14 +237,42 @@ final class WorkflowIDEModel {
     guard let workflow = selectedWorkflow, !workflow.breadcrumbs.isEmpty else { return }
     let index =
       selectedStepIndex ?? workflow.breadcrumbs.index(before: workflow.breadcrumbs.endIndex)
-    do { replay(try workflow.replayPlan(through: index), workflow: workflow) } catch {
+    do { replay(try workflow.replayPlan(through: index)) } catch {
       status = error.localizedDescription
     }
   }
 
   func replayAll() {
     guard let workflow = selectedWorkflow, !workflow.breadcrumbs.isEmpty else { return }
-    replay(workflow.gotoPlan, workflow: workflow)
+    replay(workflow.gotoPlan)
+  }
+
+  func markSelectedAsCachedReplayStart() {
+    guard let selectedStepID else { return }
+    replayStartStepID = selectedStepID
+    if let index = replayStartStepIndex {
+      status = "Cached replay will start at step \(index + 1)"
+    }
+  }
+
+  func clearCachedReplayStart() {
+    replayStartStepID = nil
+    status = "Cleared cached replay range"
+  }
+
+  func replayCachedSubsequence() {
+    guard let workflow = selectedWorkflow,
+      let start = replayStartStepIndex,
+      let end = selectedStepIndex
+    else {
+      status = "Select an end step and mark a cached replay start"
+      return
+    }
+    do {
+      replay(try workflow.cachedReplayPlan(from: start, through: end))
+    } catch {
+      status = error.localizedDescription
+    }
   }
 
   func cancelReplay() {
@@ -248,7 +285,7 @@ final class WorkflowIDEModel {
     status = "Replay cancelled"
   }
 
-  private func replay(_ plan: SuperSelectorReplayPlan, workflow: SuperSelectorWorkflow) {
+  private func replay(_ plan: SuperSelectorReplayPlan) {
     replayGeneration &+= 1
     let generation = replayGeneration
     let previousTask = replayTask
@@ -257,15 +294,19 @@ final class WorkflowIDEModel {
     prepareReplayVisualization?()
     isReplaying = true
     replayProgress = nil
-    status = "Resetting to normalized desktop…"
+    status =
+      plan.reset == .normalizedEmptyDesktop
+      ? "Resetting to normalized desktop…"
+      : "Resolving cached subsequence against the current UI…"
     replayTask = Task { [weak self] in
       guard let self else { return }
       do {
         try await replayer.execute(plan, stepDelay: stepDelay) {
           [weak self] index, step, target in
           guard self?.replayGeneration == generation else { return }
-          self?.replayProgress = index
-          self?.status = "Replaying \(index + 1)/\(plan.steps.count): \(step.action.summary)"
+          self?.replayProgress = plan.sourceStartIndex + index
+          let mode = plan.reset == .none ? "Cached action" : "Replaying"
+          self?.status = "\(mode) \(index + 1)/\(plan.steps.count): \(step.action.summary)"
           self?.showReplayTarget?(target)
         }
         guard replayGeneration == generation else { return }
@@ -274,7 +315,8 @@ final class WorkflowIDEModel {
         finishReplayVisualization?()
         visualize(
           selector: plan.highlightSelector,
-          breadcrumbs: workflow.renderedBreadcrumbs(through: plan.steps.count - 1)
+          breadcrumbs: plan.steps.map { "\($0.targetPath), \($0.action.breadcrumbText)" }
+            .joined(separator: "\n")
         )
       } catch is CancellationError {
         guard replayGeneration == generation else { return }
@@ -392,7 +434,7 @@ final class WorkflowIDEWindowController: NSWindowController, NSWindowDelegate {
       defer: false
     )
     window.title = "SuperSelector Studio"
-    window.subtitle = "CUA workflow recorder and time-travel debugger"
+    window.subtitle = "Codex Computer Use skyshots, durable targets, and cached replay"
     window.titlebarAppearsTransparent = true
     window.toolbarStyle = .unified
     window.minSize = CGSize(width: 980, height: 620)
@@ -528,8 +570,26 @@ private struct WorkflowIDEView: View {
                 index: index,
                 step: step,
                 hasScreenshot: step.screenshot != nil,
-                isReplayPosition: model.replayProgress == index
-              ).tag(step.id).id(step.id)
+                isReplayPosition: model.replayProgress == index,
+                isCachedReplayStart: model.replayStartStepID == step.id
+              )
+              .tag(step.id)
+              .id(step.id)
+              .contextMenu {
+                Button("Mark Cached Replay Start", systemImage: "bolt.circle") {
+                  model.selectStep(step.id)
+                  model.markSelectedAsCachedReplayStart()
+                }
+                if model.replayStartStepID != nil {
+                  Button("Run Cached Subsequence to Here", systemImage: "bolt.fill") {
+                    model.selectStep(step.id)
+                    model.replayCachedSubsequence()
+                  }
+                  Button("Clear Cached Replay Start", systemImage: "xmark.circle") {
+                    model.clearCachedReplayStart()
+                  }
+                }
+              }
             }
           }
           .listStyle(.inset)
@@ -558,8 +618,22 @@ private struct WorkflowIDEView: View {
               let data = model.screenshotData(for: screenshot.assetID)
             {
               GroupBox("Selected step") {
-                WorkflowScreenshotPreview(screenshot: screenshot, imageData: data)
-                  .frame(minHeight: 190, idealHeight: 260)
+                HStack(alignment: .top, spacing: 12) {
+                  WorkflowScreenshotPreview(screenshot: screenshot, imageData: data)
+                    .frame(minWidth: 260, minHeight: 190, idealHeight: 260)
+                  if let appStateText = model.selectedStep?.appStateText,
+                    !appStateText.isEmpty
+                  {
+                    ScrollView([.vertical, .horizontal]) {
+                      Text(appStateText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minWidth: 220, minHeight: 190, idealHeight: 260)
+                    .accessibilityLabel("Computer Use AppState text")
+                  }
+                }
               }
             }
 
@@ -645,6 +719,14 @@ private struct WorkflowIDEView: View {
       .disabled(model.selectedWorkflow?.breadcrumbs.isEmpty != false || model.isReplaying)
       Menu("More", systemImage: "ellipsis.circle") {
         Button("Replay Full Workflow", systemImage: "play.fill") { model.replayAll() }
+        Button("Mark Selected as Cached Start", systemImage: "bolt.circle") {
+          model.markSelectedAsCachedReplayStart()
+        }
+        .disabled(model.selectedStep == nil)
+        Button("Run Cached Subsequence", systemImage: "bolt.fill") {
+          model.replayCachedSubsequence()
+        }
+        .disabled(model.replayStartStepID == nil || model.selectedStep == nil)
         Button("Copy Selected JSON", systemImage: "doc.on.doc") { model.copySelectedJSON() }
         Button("Copy All JSON", systemImage: "doc.on.doc.fill") { model.copyAllJSON() }
         Divider()
@@ -665,7 +747,7 @@ private struct WorkflowIDEView: View {
         .foregroundStyle(model.isReplaying ? Color.orange : Color.green)
       Text(model.status).lineLimit(1)
       Spacer()
-      Text("ss3/e1 · mac.ax + screen.absolute")
+      Text("Computer Use Skyshot · AppState.text · durable ss3/e1 cache")
         .foregroundStyle(.secondary)
     }
     .font(.caption)
@@ -756,6 +838,7 @@ private struct WorkflowStepRow: View {
   let step: SuperSelectorWorkflowStep
   let hasScreenshot: Bool
   let isReplayPosition: Bool
+  let isCachedReplayStart: Bool
 
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
@@ -773,6 +856,11 @@ private struct WorkflowStepRow: View {
               .font(.caption)
               .foregroundStyle(.secondary)
               .accessibilityLabel("Screenshot available")
+          }
+          if isCachedReplayStart {
+            Label("cache start", systemImage: "bolt.fill")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.orange)
           }
         }
         Text(step.targetPath).font(.caption).foregroundStyle(.secondary).lineLimit(3)
@@ -869,6 +957,17 @@ private struct ReplayControlSurface: View {
         Button("Replay from Reset", systemImage: "play.fill") { model.replayAll() }
         Button("To Selected", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") {
           model.replayToSelected()
+        }
+        if model.replayStartStepID == nil {
+          Button("Mark Cache Start", systemImage: "bolt.circle") {
+            model.markSelectedAsCachedReplayStart()
+          }
+          .disabled(model.selectedStep == nil)
+        } else {
+          Button("Run Cached Range", systemImage: "bolt.fill") {
+            model.replayCachedSubsequence()
+          }
+          .disabled(model.selectedStep == nil)
         }
       }
       Spacer()

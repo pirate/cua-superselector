@@ -8,6 +8,8 @@ private struct InspectorPresentation {
   let hints: [Hint]
   let providerReports: [ProviderReport]
   let breadcrumbs: String
+  let renderTree: UIElementRenderTree
+  let screenshot: BreadcrumbScreenshot?
 
   func value(_ kind: String) -> String? {
     hints.first { $0.kind == kind }?.value
@@ -66,12 +68,18 @@ final class VisualInspectorView: NSView {
 
   required init?(coder: NSCoder) { nil }
 
-  func update(with observation: SuperSelectorObservation, breadcrumbs: String) {
+  func update(
+    with observation: SuperSelectorObservation,
+    breadcrumbs: String,
+    screenshot: BreadcrumbScreenshot? = nil
+  ) {
     update(
       selector: observation.compactSelector,
       hints: observation.hints,
       providerReports: observation.providerReports,
-      breadcrumbs: breadcrumbs
+      breadcrumbs: breadcrumbs,
+      renderTree: observation.renderTree,
+      screenshot: screenshot
     )
   }
 
@@ -79,13 +87,17 @@ final class VisualInspectorView: NSView {
     selector: String,
     hints: [Hint],
     providerReports: [ProviderReport],
-    breadcrumbs: String
+    breadcrumbs: String,
+    renderTree: UIElementRenderTree = .empty,
+    screenshot: BreadcrumbScreenshot? = nil
   ) {
     canvas.presentation = InspectorPresentation(
       selector: selector,
       hints: hints,
       providerReports: providerReports,
-      breadcrumbs: breadcrumbs
+      breadcrumbs: breadcrumbs,
+      renderTree: renderTree,
+      screenshot: screenshot
     )
     canvas.resize(to: scrollView.contentSize.width)
     scrollView.contentView.scroll(to: .zero)
@@ -131,6 +143,11 @@ private final class InspectorCanvasView: NSView {
     var y: CGFloat = 12
     drawHeader(model, y: &y)
     drawProviders(model.providerReports, y: &y)
+
+    if model.screenshot != nil || !model.renderTree.nodes.isEmpty {
+      drawAgentState(model, in: sectionRect(y: y, height: 310))
+      y += 320
+    }
 
     let content = CGRect(x: 12, y: y, width: bounds.width - 24, height: 1)
     let gap: CGFloat = 10
@@ -199,6 +216,7 @@ private final class InspectorCanvasView: NSView {
   private func contentHeight(for model: InspectorPresentation?) -> CGFloat {
     guard let model else { return 1 }
     var height: CGFloat = 12 + 54 + 30
+    if model.screenshot != nil || !model.renderTree.nodes.isEmpty { height += 320 }
     if model.hasApplication || model.hasIdentity { height += 200 }
     let hasRemaining = !remainingHints(model).isEmpty
     if model.hasGeometry && (model.hasStateOrActions || hasRemaining) {
@@ -258,6 +276,173 @@ private final class InspectorCanvasView: NSView {
       if x > bounds.width - 120 { break }
     }
     y += 30
+  }
+
+  private func drawAgentState(_ model: InspectorPresentation, in rect: CGRect) {
+    drawSectionBackground(rect)
+    let gap: CGFloat = 12
+    let content = rect.insetBy(dx: 14, dy: 12)
+    let screenshotWidth = floor((content.width - gap) * 0.53)
+    let screenshotPanel = CGRect(
+      x: content.minX,
+      y: content.minY + 24,
+      width: screenshotWidth,
+      height: content.height - 24
+    )
+    let treePanel = CGRect(
+      x: screenshotPanel.maxX + gap,
+      y: content.minY + 24,
+      width: content.maxX - screenshotPanel.maxX - gap,
+      height: content.height - 24
+    )
+    drawText(
+      "SKYSHOT SCREENSHOT + BOX MODEL",
+      in: CGRect(x: screenshotPanel.minX, y: content.minY, width: screenshotPanel.width, height: 16),
+      font: .monospacedSystemFont(ofSize: 9.5, weight: .bold),
+      color: muted
+    )
+    drawText(
+      "APPSTATE.TEXT · AGENT TREE",
+      in: CGRect(x: treePanel.minX, y: content.minY, width: treePanel.width, height: 16),
+      font: .monospacedSystemFont(ofSize: 9.5, weight: .bold),
+      color: muted
+    )
+
+    drawRoundedRect(
+      screenshotPanel,
+      radius: 7,
+      fill: NSColor.black.withAlphaComponent(0.32),
+      stroke: NSColor.white.withAlphaComponent(0.1)
+    )
+    if let screenshot = model.screenshot,
+      let image = NSImage(data: screenshot.jpegData),
+      image.size.width > 0, image.size.height > 0
+    {
+      let scale = min(
+        screenshotPanel.width / image.size.width,
+        screenshotPanel.height / image.size.height
+      )
+      let imageRect = CGRect(
+        x: screenshotPanel.midX - image.size.width * scale / 2,
+        y: screenshotPanel.midY - image.size.height * scale / 2,
+        width: image.size.width * scale,
+        height: image.size.height * scale
+      )
+      image.draw(
+        in: imageRect,
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1,
+        respectFlipped: true,
+        hints: [.interpolation: NSImageInterpolation.medium]
+      )
+      if let source = SuperSelectorBoxModel(hints: model.hints) {
+        let targetFrame = model.renderTree.nodes.first(where: \.isTarget)?.frameQuartz
+          ?? source.targetQuartz
+        let boxModel = SuperSelectorBoxModel(
+          screenQuartz: screenshot.screenFrameQuartz,
+          windowQuartz: source.windowQuartz,
+          targetQuartz: targetFrame,
+          pointerQuartz: source.pointerQuartz
+        )
+        let projection = boxModel.projection(in: imageRect, origin: .topLeft)
+        if let target = projection.target {
+          drawRoundedRect(
+            target.insetBy(dx: -1.5, dy: -1.5),
+            radius: 4,
+            fill: inspectorPink.withAlphaComponent(0.08),
+            stroke: inspectorPink,
+            lineWidth: 2
+          )
+          if let elementIndex = model.renderTree.targetElementIndex {
+            let label = "[\(elementIndex)]"
+            let width = textWidth(
+              label,
+              font: .monospacedSystemFont(ofSize: 9, weight: .bold)
+            ) + 10
+            let labelRect = CGRect(
+              x: min(imageRect.maxX - width, max(imageRect.minX, target.minX)),
+              y: max(imageRect.minY, target.minY - 19),
+              width: width,
+              height: 17
+            )
+            drawRoundedRect(
+              labelRect,
+              radius: 4,
+              fill: inspectorPink,
+              stroke: nil
+            )
+            drawText(
+              label,
+              in: labelRect.insetBy(dx: 5, dy: 2),
+              font: .monospacedSystemFont(ofSize: 9, weight: .bold),
+              color: .white
+            )
+          }
+        }
+      }
+    } else {
+      drawText(
+        "Waiting for a clean screenshot…",
+        in: screenshotPanel.insetBy(dx: 12, dy: 12),
+        font: .systemFont(ofSize: 11, weight: .medium),
+        color: muted,
+        alignment: .center,
+        lineBreak: .byTruncatingTail
+      )
+    }
+
+    drawRoundedRect(
+      treePanel,
+      radius: 7,
+      fill: NSColor.black.withAlphaComponent(0.24),
+      stroke: NSColor.white.withAlphaComponent(0.1)
+    )
+    let rendered = ComputerUseNodeAPIRenderer.render(model.renderTree)
+    let allLines = rendered.components(separatedBy: "\n")
+    let maximumLines = max(1, Int((treePanel.height - 18) / 14))
+    let visibleLines = agentTreeExcerpt(
+      allLines,
+      targetElementIndex: model.renderTree.targetElementIndex,
+      maximumLines: maximumLines
+    )
+    for (row, line) in visibleLines.enumerated() {
+      let targetPrefix = model.renderTree.targetElementIndex.map { "\($0) " }
+      let isTarget = targetPrefix.map { line.trimmingCharacters(in: .whitespaces).hasPrefix($0) }
+        ?? false
+      drawText(
+        line,
+        in: CGRect(
+          x: treePanel.minX + 9,
+          y: treePanel.minY + 8 + CGFloat(row) * 14,
+          width: treePanel.width - 18,
+          height: 13
+        ),
+        font: .monospacedSystemFont(ofSize: 9.2, weight: isTarget ? .bold : .regular),
+        color: isTarget ? inspectorPink : .white,
+        lineBreak: .byTruncatingTail
+      )
+    }
+  }
+
+  private func agentTreeExcerpt(
+    _ lines: [String],
+    targetElementIndex: Int?,
+    maximumLines: Int
+  ) -> [String] {
+    guard lines.count > maximumLines, maximumLines >= 4 else {
+      return Array(lines.prefix(maximumLines))
+    }
+    guard let targetElementIndex,
+      let targetLine = lines.firstIndex(where: {
+        $0.trimmingCharacters(in: .whitespaces).hasPrefix("\(targetElementIndex) ")
+      })
+    else { return Array(lines.prefix(maximumLines - 1)) + ["… \(lines.count - maximumLines + 1) more lines"] }
+    let bodyCount = maximumLines - 2
+    let lowerBound = max(1, min(targetLine - bodyCount / 2, lines.count - bodyCount))
+    let upperBound = min(lines.count, lowerBound + bodyCount)
+    return [lines[0], lowerBound > 1 ? "…" : lines[1]]
+      + Array(lines[lowerBound..<upperBound])
   }
 
   private func drawApplication(_ model: InspectorPresentation, in rect: CGRect) {
